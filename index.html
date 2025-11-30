@@ -2,24 +2,42 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>Turret V73.1 - FIXED</title>
     <script src="phaser.min.js"></script>
     <style>
-        body { 
-            margin: 0; padding: 0; background-color: #000; overflow: hidden; 
-            touch-action: none; font-family: 'Courier New', Courier, monospace; 
-        }
-        #game-container { 
-            width: 100vw; height: 100vh; display: flex; 
-            justify-content: center; align-items: center; 
-            cursor: none;
-        }
-        canvas { 
-            image-rendering: pixelated; 
-            border: 1px solid #333;
-        }
-    </style>
+    html, body {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        padding: 0;
+        background-color: #000;
+        overflow: hidden; /* Mencegah scroll yang tidak sengaja */
+        touch-action: none; /* Mencegah zoom/scroll touch default */
+    }
+
+    #game-container {
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        width: 100%;
+        height: 100%;
+    }
+
+    canvas {
+        /* Tambahkan border tipis agar kamu tahu batas area game vs background HP */
+        border: 1px solid #333; 
+        box-shadow: 0 0 20px rgba(0, 255, 0, 0.1); /* Efek glow tipis biar keren */
+        image-rendering: pixelated;
+    }
+</style>
+
+
 </head>
 <body>
 
@@ -260,6 +278,7 @@ class MainScene extends Phaser.Scene {
         this.timeScale = 1.0;
 
         this.createUI();
+        this.cameras.main.setZoom(1);
     }
     
     // --- POOLING METHODS ---
