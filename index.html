@@ -1,0 +1,1038 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Turret V73.1 - FIXED</title>
+    <script src="phaser.min.js"></script>
+    <style>
+        body { 
+            margin: 0; padding: 0; background-color: #000; overflow: hidden; 
+            touch-action: none; font-family: 'Courier New', Courier, monospace; 
+        }
+        #game-container { 
+            width: 100vw; height: 100vh; display: flex; 
+            justify-content: center; align-items: center; 
+            cursor: none;
+        }
+        canvas { 
+            image-rendering: pixelated; 
+            border: 1px solid #333;
+        }
+    </style>
+</head>
+<body>
+
+<div id="game-container"></div>
+
+<script>
+// 1. GAME CONFIGURATION & DATA
+
+const CONFIG = {
+    WIDTH: 720,
+    HEIGHT: 1280,
+    BASE_DMG: 100,
+    LOCK_BIAS: 40,
+    KNOCKBACK: 4,
+    PHASE_DURATION: 120,
+    ELITE_START: 840,
+    DASHER_SENSE: 90000,
+    CULL_HP: -50,
+    SCALING_FACTOR: 1.025,
+    SCALING_INTERVAL: 10
+};
+
+const DATA = {
+    PHASE_COLORS: [0xffffff, 0xaaffaa, 0xffff00, 0xffaa00, 0xff5555, 0xff0000],
+    DMG_MULTS:    [1.0, 1.5, 2.0, 2.5, 3.0, 3.5],
+    HP_MULTS:     [1.0, 1.5, 2.0, 2.5, 3.0, 3.5],
+    KB_TURRET:    [0.1, 0.2, 0.4, 0.6, 0.9, 1.2],
+    SPAWN_DELAYS: [50, 40, 30, 20, 10, 10],
+    BARRELS: {
+        1: [{x:0, y:0}],
+        2: [{x:0, y:-5.5}, {x:0, y:5.5}],
+        3: [{x:0, y:-8.5}, {x:10, y:0}, {x:0, y:8.5}],
+        4: [{x:0, y:-11.5}, {x:8, y:-1.5}, {x:8, y:1.5}, {x:0, y:11.5}]
+    }
+};
+
+const UTILS = {
+    PI2: Math.PI * 2,
+    distSq: (x1, y1, x2, y2) => (x1-x2)**2 + (y1-y2)**2
+};
+
+// 2. ASSET FACTORY (VISUAL GENERATION)
+
+const AssetFactory = {
+    generate: function(textures) {
+        const create = (key, w, h, fn) => {
+            if (textures.exists(key)) return;
+            const c = textures.createCanvas(key, w, h);
+            fn(c.context, w, h);
+            c.refresh();
+        };
+
+        // Environment
+        create('background', CONFIG.WIDTH, CONFIG.HEIGHT, ctx => {
+            ctx.fillStyle = '#050a05'; ctx.fillRect(0, 0, CONFIG.WIDTH, CONFIG.HEIGHT);
+            ctx.translate(CONFIG.WIDTH/2, CONFIG.HEIGHT/2);
+            ctx.strokeStyle = '#1f2f1f'; ctx.lineWidth = 1;
+            ctx.beginPath(); for(let r=100; r<1000; r+=100) ctx.arc(0,0,r,0,UTILS.PI2);
+            ctx.moveTo(0,-1000); ctx.lineTo(0,1000); ctx.moveTo(-1000,0); ctx.lineTo(1000,0); ctx.stroke();
+        });
+
+        // Player Weapons - SNIPER VISUAL (Hijau & Kuning)
+        create('sniper_weapon', 100, 30, ctx => {
+            ctx.translate(30, 15);
+            // Body (Green Army)
+            ctx.fillStyle = '#2a3a2a'; ctx.fillRect(20, -4, 60, 8); 
+            ctx.fillStyle = '#3a4a3a'; ctx.fillRect(20, -1, 55, 2);
+            // Stock (Green Dark)
+            ctx.fillStyle = '#1a2a1a'; ctx.beginPath(); 
+            ctx.moveTo(-10, -8); ctx.lineTo(30, -8); ctx.lineTo(40, -4); ctx.lineTo(40, 4); ctx.lineTo(30, 8); ctx.lineTo(-10, 8); ctx.fill();
+            // Detail
+            ctx.fillStyle = '#4a5a4a'; ctx.fillRect(-5, -6, 30, 2); ctx.fillRect(-5, 4, 30, 2);
+            // SCOPE (Yellow like Turret Head)
+            ctx.fillStyle = '#aa8800'; ctx.beginPath(); ctx.arc(-15, 0, 14, 0, UTILS.PI2); ctx.fill();
+            ctx.fillStyle = '#eebb00'; ctx.beginPath(); ctx.arc(-15, 0, 8, 0, UTILS.PI2); ctx.fill();
+        });
+
+        create('bullet', 32, 6, ctx => {
+            let g = ctx.createLinearGradient(0,0,32,0); 
+            g.addColorStop(0,'rgba(255,255,255,0)'); g.addColorStop(1,'rgba(255,255,255,1)');
+            ctx.fillStyle = g; ctx.fillRect(0,1,32,4);
+        });
+
+        create('bullet_drone', 12, 6, ctx => {
+            let g = ctx.createLinearGradient(0,0,12,0); 
+            g.addColorStop(0,'rgba(0,255,255,0)'); g.addColorStop(1,'rgba(200,255,255,1)');
+            ctx.fillStyle = g; ctx.fillRect(0,1,12,4);
+        });
+
+        // Enemies
+        create('normal', 32, 32, ctx => {
+            ctx.translate(16, 16);
+            ctx.fillStyle = '#002200'; ctx.beginPath(); 
+            ctx.moveTo(0, -14); ctx.lineTo(12, 0); ctx.lineTo(0, 14); ctx.lineTo(-12, 0); ctx.closePath(); ctx.fill();
+            ctx.lineWidth = 2; ctx.strokeStyle = '#00ff00'; ctx.stroke();
+            ctx.fillStyle = '#00aa00'; ctx.beginPath(); 
+            ctx.moveTo(0, -8); ctx.lineTo(8, 0); ctx.lineTo(0, 8); ctx.lineTo(-8, 0); ctx.closePath(); ctx.fill();
+            ctx.fillStyle = '#ffffff'; ctx.beginPath(); ctx.arc(0, 0, 2, 0, UTILS.PI2); ctx.fill();
+        });
+
+        create('dasher', 32, 32, ctx => {
+            ctx.translate(16, 16); ctx.fillStyle = '#333300'; ctx.beginPath(); ctx.moveTo(-10,-7); ctx.lineTo(10,0); ctx.lineTo(-10,7); ctx.fill();
+            ctx.lineWidth = 2; ctx.strokeStyle = '#ffff00'; ctx.stroke(); 
+            ctx.fillStyle = '#ffffff'; ctx.beginPath(); ctx.arc(10,0,2,0,UTILS.PI2); ctx.fill();
+        });
+
+        create('boss', 80, 80, ctx => {
+            ctx.translate(40, 40); ctx.beginPath(); ctx.arc(0,0,32,0,UTILS.PI2); ctx.fillStyle='#221100'; ctx.fill();
+            ctx.lineWidth=4; ctx.strokeStyle='#ffaa00'; ctx.stroke();
+            ctx.beginPath(); ctx.arc(0,0,24,0,UTILS.PI2); ctx.fillStyle='#664400'; ctx.fill();
+            ctx.beginPath(); ctx.arc(0,0,11,0,UTILS.PI2); ctx.fillStyle='#ffddaa'; ctx.fill();
+            ctx.fillStyle='#ffffff'; ctx.beginPath(); ctx.arc(0,0,4,0,UTILS.PI2); ctx.fill();
+        });
+
+        create('orbital', 32, 32, ctx => {
+            ctx.translate(16, 16); ctx.fillStyle='#110022'; ctx.beginPath(); ctx.arc(0,0,12,0,UTILS.PI2); ctx.fill();
+            ctx.lineWidth=2; ctx.strokeStyle='#aa00ff'; ctx.stroke();
+            ctx.fillStyle='#ffccff'; ctx.beginPath(); ctx.arc(0,0,4,0,UTILS.PI2); ctx.fill();
+        });
+
+        create('splitter', 40, 40, ctx => {
+            ctx.translate(20, 20); 
+            ctx.fillStyle = '#2a0500'; ctx.beginPath(); ctx.arc(0, 0, 16, 0, UTILS.PI2); ctx.fill();
+            ctx.lineWidth = 2; ctx.strokeStyle = '#ff8800'; ctx.stroke();
+            ctx.fillStyle = '#ff3b3b'; 
+            for(let i=0; i<3; i++){ ctx.save(); ctx.rotate(i * (UTILS.PI2/3)); ctx.translate(0, -8); ctx.beginPath(); ctx.arc(0, 0, 4, 0, UTILS.PI2); ctx.fill(); ctx.restore(); }
+        });
+
+        create('mini', 16, 16, ctx => {
+            ctx.translate(8, 8); ctx.fillStyle='#333300'; ctx.beginPath(); ctx.moveTo(0,-6); ctx.lineTo(5,0); ctx.lineTo(0,6); ctx.lineTo(-5,0); ctx.fill();
+            ctx.strokeStyle='#ffff00'; ctx.lineWidth=1; ctx.stroke(); ctx.fillStyle='#ffffff'; ctx.beginPath(); ctx.arc(0,0,2,0,UTILS.PI2); ctx.fill();
+        });
+
+        // Misc
+        create('turretBase', 80, 80, ctx => {
+            ctx.translate(40, 40); ctx.beginPath(); ctx.arc(0,0,34,0,UTILS.PI2); ctx.fillStyle='#111'; ctx.fill();
+            ctx.beginPath(); ctx.arc(0,0,30,0,UTILS.PI2); ctx.fillStyle='#2b2f2b'; ctx.fill();
+            ctx.lineWidth=3; ctx.strokeStyle='#444'; ctx.stroke();
+            ctx.fillStyle='#1a1f1a'; for(let i=0; i<6; i++){ ctx.save(); ctx.translate(Math.cos(i*UTILS.PI2/6)*22, Math.sin(i*UTILS.PI2/6)*22); ctx.rotate(i*UTILS.PI2/6); ctx.fillRect(-4,-6,8,12); ctx.restore(); }
+            ctx.beginPath(); ctx.arc(0,0,10,0,UTILS.PI2); ctx.fillStyle='#151915'; ctx.fill();
+        });
+
+        create('turretHead', 54, 54, ctx => {
+            ctx.translate(27, 27); let g=ctx.createLinearGradient(0,-25,0,25); g.addColorStop(0,'#3b4235'); g.addColorStop(0.5,'#556b2f'); g.addColorStop(1,'#3b4235');
+            ctx.fillStyle=g; ctx.fillRect(-20,-20,40,40); ctx.strokeStyle='#1a1f1a'; ctx.lineWidth=2; ctx.strokeRect(-20,-20,40,40);
+            ctx.fillStyle='#eebb00'; ctx.beginPath(); ctx.moveTo(-4,-18); ctx.lineTo(8,-18); ctx.lineTo(2,18); ctx.lineTo(-10,18); ctx.fill();
+        });
+
+        create('missile', 24, 16, ctx => {
+            ctx.translate(12, 8); ctx.fillStyle='#2b2f33'; ctx.fillRect(-9,-3,18,6);
+            ctx.fillStyle='#c0c0c0'; ctx.beginPath(); ctx.moveTo(9,0); ctx.lineTo(3,-4); ctx.lineTo(3,4); ctx.fill();
+            ctx.fillStyle='#556b2f'; ctx.beginPath(); ctx.moveTo(-9,-3); ctx.lineTo(-13,-6); ctx.lineTo(-9,0); ctx.fill(); ctx.beginPath(); ctx.moveTo(-9,3); ctx.lineTo(-13,6); ctx.lineTo(-9,0); ctx.fill();
+            ctx.fillStyle='#eebb00'; ctx.fillRect(-2,-3,3,6);
+        });
+
+        create('drone', 24, 24, ctx => {
+            ctx.translate(12, 12); let g=ctx.createLinearGradient(0,-10,0,10); g.addColorStop(0,'#202620'); g.addColorStop(0.5,'#3f4b34'); g.addColorStop(1,'#202620');
+            ctx.fillStyle=g; ctx.beginPath(); ctx.arc(0,0,9,0,UTILS.PI2); ctx.fill(); ctx.strokeStyle='#667766'; ctx.lineWidth=2; ctx.beginPath(); ctx.arc(0,0,9,0,UTILS.PI2); ctx.stroke();
+            ctx.strokeStyle='#111'; ctx.beginPath(); ctx.moveTo(-8,0); ctx.lineTo(8,0); ctx.moveTo(0,-8); ctx.lineTo(0,8); ctx.stroke();
+            ctx.fillStyle='#eebb00'; ctx.beginPath(); ctx.arc(0,0,2,0,UTILS.PI2); ctx.fill(); ctx.beginPath(); ctx.arc(6,0,1.5,0,UTILS.PI2); ctx.fill(); ctx.beginPath(); ctx.arc(-6,0,1.5,0,UTILS.PI2); ctx.fill();
+        });
+
+        create('particle', 4, 4, ctx => { ctx.fillStyle='#fff'; ctx.fillRect(0,0,4,4); });
+        
+        create('muzzle', 16, 16, ctx => {
+             ctx.translate(8,8); ctx.fillStyle='#ffe4aa'; ctx.beginPath(); ctx.arc(0,0,6,0,UTILS.PI2); ctx.fill();
+        });
+        
+        create('crit', 30, 30, ctx => {
+            ctx.translate(15,15); 
+            ctx.font = 'bold 24px Courier'; ctx.fillStyle='#ff0000'; ctx.textAlign='center'; ctx.textBaseline='middle';
+            ctx.fillText('!', 0, 0);
+        });
+    }
+};
+
+// 3. MAIN GAME SCENE
+
+class MainScene extends Phaser.Scene {
+    constructor() { super('MainScene'); }
+
+    preload() {
+        this.load.audio('turret', 'turret.wav');
+        this.load.audio('drone', 'drone.wav');
+        this.load.audio('missile', 'missile.wav');
+        this.load.audio('sniper', 'sniper.wav');
+        this.load.audio('explode', 'explode.wav');
+        AssetFactory.generate(this.textures);
+    }
+
+    create() {
+        this.center = { x: CONFIG.WIDTH/2, y: CONFIG.HEIGHT/2 };
+        
+        this.add.image(0, 0, 'background').setOrigin(0).setDepth(-10);
+
+        this.vis = {
+            enemies: this.add.group(),
+            bullets: this.add.group(),
+            missiles: this.add.group(),
+            parts: this.add.group(),
+            drones: this.add.group(),
+            muzzles: this.add.group(),
+            crits: this.add.group()
+        };
+
+        this.entities = { 
+            enemies: [], bullets: [], missiles: [], 
+            drones: [], lightnings: [], shockwaves: [],
+            particles: [], muzzles: [], crits: []
+        };
+        
+        this.pools = {
+            enemies: [], bullets: [], missiles: [], 
+            lightnings: [], shockwaves: [],
+            particles: [], muzzles: [], crits: []
+        };
+
+        this.gRadar = this.add.graphics().setDepth(1);
+        this.gLaser = this.add.graphics().setDepth(4);
+        this.gEnemyOverlay = this.add.graphics().setDepth(5); 
+        this.gTurretBarrels = this.add.graphics().setDepth(6);
+        this.gLightning = this.add.graphics().setDepth(20);
+        this.gShockwave = this.add.graphics().setDepth(2);
+
+        // V73: Origin changed to (0.15, 0.5) to center the yellow scope
+        this.visSniperGun = this.add.sprite(this.center.x, this.center.y, 'sniper_weapon').setDepth(8).setVisible(false).setOrigin(0.15, 0.5);
+
+        this.state = { run: false, frame: 0, elapsed: 0, radarAngle: 0, phaseIndex: 0, phaseName: "READY", timeStr: "00:00", isOverdrive: false, overdriveEnd: 0, screenShake: 0, kills: 0, nextEnemyId: 0 };
+        
+        this.turret = {
+            angle: -1.57, sniperAngle: -1.57, cd: 0, muzzleFlash: 0, multi: 1,
+            frost: false, sniperCd: 0, sniperTarget: null, sniperTargetUid: -1,
+            sniperUnlocked: false, crit: false, lightning: false, recoil: 0, sniperRecoil: 0,
+            visBase: this.add.image(this.center.x, this.center.y, 'turretBase').setDepth(5),
+            visHead: this.add.image(this.center.x, this.center.y, 'turretHead').setDepth(7)
+        };
+        this.lockedTarget = null;
+        this.timeScale = 1.0;
+
+        this.createUI();
+    }
+    
+    // --- POOLING METHODS ---
+
+    spawnEnemy(x, y, type, hp, speed, r) {
+        let e;
+        if (this.pools.enemies.length > 0) {
+            e = this.pools.enemies.pop();
+            e.active = true;
+            e.x = x; e.y = y; e.hp = hp; e.maxHp = hp; 
+            e.spd = speed; e.baseSpd = speed; e.r = r; e.rSq = r*r; 
+            e.type = type; e.angle = 0; e.dashed = false; e.frozen = 0;
+            e.hitTimer = 0; e.scatterTimer = 0;
+            
+            e.sprite.setVisible(true);
+            e.sprite.setTexture(type);
+            e.sprite.clearTint();
+            e.sprite.setAlpha(1);
+            if(type === 'mini') e.sprite.setTint(0xffaaaa);
+        } else {
+            e = { 
+                active: true, x:x, y:y, hp:hp, maxHp:hp, spd:speed, 
+                baseSpd:speed, r:r, rSq:r*r, type:type, angle:0, 
+                startFrame:this.state.frame, dashed:false, frozen:0, 
+                sprite: this.vis.enemies.create(x, y, type), 
+                hitTimer: 0, scatterTimer: 0 
+            };
+            if(type === 'mini') e.sprite.setTint(0xffaaaa);
+        }
+        e.uid = this.state.nextEnemyId++; // UID System (V71)
+        this.entities.enemies.push(e);
+        return e;
+    }
+
+    spawnBullet(x, y, vx, vy, life, dmg, isDrone) {
+        let b;
+        if (this.pools.bullets.length > 0) {
+            b = this.pools.bullets.pop();
+            b.active = true;
+            b.x = x; b.y = y; b.vx = vx; b.vy = vy; b.life = life; b.dmg = dmg; b.isDrone = isDrone;
+            
+            b.sprite.setVisible(true);
+            b.sprite.setTexture(isDrone ? 'bullet_drone' : 'bullet');
+            b.sprite.setOrigin(1, 0.5);
+        } else {
+            let key = isDrone ? 'bullet_drone' : 'bullet';
+            b = { active:true, x:x, y:y, vx:vx, vy:vy, life:life, dmg:dmg, isDrone:isDrone, sprite: this.vis.bullets.create(x,y,key) };
+            b.sprite.setOrigin(1, 0.5);
+        }
+        b.sprite.setDepth(5); // V72 Visual Fix: Depth
+        this.entities.bullets.push(b);
+    }
+
+    spawnMissile(x, y, angle, dmg) {
+        let m;
+        if(this.pools.missiles.length > 0) {
+            m = this.pools.missiles.pop();
+            m.active = true;
+            m.x = x; m.y = y; m.angle = angle; m.speed = 1; m.maxSpeed = 15;
+            m.vx = 0; m.vy = 0; m.life = 400; m.dmg = dmg; m.target = null;
+            m.sprite.setVisible(true);
+            m.sprite.setAlpha(1);
+        } else {
+            m = { active:true, x:x, y:y, angle:angle, speed:1, maxSpeed:15, vx:0, vy:0, life:400, dmg:dmg, target:null, sprite:this.vis.missiles.create(x,y,'missile') };
+        }
+        this.entities.missiles.push(m);
+    }
+
+    spawnParticle(x, y, color) {
+        let p;
+        if (this.pools.particles.length > 0) {
+            p = this.pools.particles.pop();
+            p.active = true;
+            p.x = x; p.y = y; p.life = 1.0; p.vx = (Math.random()-0.5)*2; p.vy = (Math.random()-0.5)*2;
+            p.sprite.setVisible(true);
+            p.sprite.setPosition(x,y);
+            p.sprite.setTint(color);
+            p.sprite.setAlpha(1);
+        } else {
+            p = { active:true, x:x, y:y, life:1.0, vx:(Math.random()-0.5)*2, vy:(Math.random()-0.5)*2, sprite: this.vis.parts.create(x,y,'particle') };
+            p.sprite.setTint(color);
+        }
+        this.entities.particles.push(p);
+    }
+
+    spawnMuzzle(x, y) {
+        let m;
+        if (this.pools.muzzles.length > 0) {
+            m = this.pools.muzzles.pop();
+            m.active = true; m.x = x; m.y = y; m.life = 4;
+            m.sprite.setVisible(true); m.sprite.setPosition(x,y); m.sprite.setAlpha(1);
+        } else {
+            m = { active:true, x:x, y:y, life:4, sprite: this.vis.muzzles.create(x,y,'muzzle').setDepth(6.1) };
+        }
+        this.entities.muzzles.push(m);
+    }
+    
+    spawnCrit(x, y) {
+        let c;
+        if(this.pools.crits.length > 0) {
+            c = this.pools.crits.pop();
+            c.active = true; c.x = x; c.y = y; c.life = 30;
+            c.sprite.setVisible(true); c.sprite.setPosition(x,y); c.sprite.setAlpha(1); c.sprite.setScale(1);
+        } else {
+            c = { active:true, x:x, y:y, life:30, sprite: this.vis.crits.create(x,y,'crit').setDepth(20) };
+        }
+        this.entities.crits.push(c);
+    }
+
+    spawnLightning(x1, y1, x2, y2) {
+        let l;
+        if(this.pools.lightnings.length > 0) {
+            l = this.pools.lightnings.pop();
+            l.active = true; l.x1=x1; l.y1=y1; l.x2=x2; l.y2=y2; l.life=10;
+            for(let i=0; i<10; i++) l.offsets[i] = (Math.random()-0.5)*12;
+        } else {
+            l = { active:true, x1:x1, y1:y1, x2:x2, y2:y2, life:10, offsets: Array.from({length:10}, ()=> (Math.random()-0.5)*12) };
+        }
+        this.entities.lightnings.push(l);
+    }
+
+    addShockwave(x, y, rStart, rEnd, colorStr) {
+        let color = parseInt(colorStr.replace('#', '0x'));
+        let s;
+        if(this.pools.shockwaves.length > 0) {
+            s = this.pools.shockwaves.pop();
+            s.active = true; s.x=x; s.y=y; s.r=rStart; s.maxR=rEnd; s.color=color; s.alpha=1.0;
+        } else {
+            s = { active:true, x:x, y:y, r:rStart, maxR:rEnd, color:color, alpha:1.0 };
+        }
+        this.entities.shockwaves.push(s);
+    }
+
+    killEntity(arr, index, pool) {
+        let e = arr[index];
+        e.active = false;
+        if(e.sprite) e.sprite.setVisible(false);
+        pool.push(e);
+        let last = arr[arr.length - 1];
+        arr[index] = last;
+        arr.pop();
+    }
+
+    // --- END POOLING METHODS ---
+
+    createUI() {
+        const style = { fontFamily: 'Courier New', fontSize: '32px', color: '#00ffaa', fontStyle: 'bold' };
+        
+        this.startCont = this.add.container(0, 0).setDepth(100);
+        let bg = this.add.rectangle(CONFIG.WIDTH/2, CONFIG.HEIGHT/2, CONFIG.WIDTH, CONFIG.HEIGHT, 0x000a00, 0.9);
+        let title = this.add.text(CONFIG.WIDTH/2, CONFIG.HEIGHT/2 - 50, "TURRET V73.1", style).setOrigin(0.5);
+        let sub = this.add.text(CONFIG.WIDTH/2, CONFIG.HEIGHT/2, "SNIPER VISUAL OVERHAUL (FIXED)", {fontSize:'14px', color:'#686'}).setOrigin(0.5);
+        let btn = this.add.text(CONFIG.WIDTH/2, CONFIG.HEIGHT/2 + 100, "[ INITIATE ]", {fontSize:'24px', backgroundColor:'#111', color:'#4f4', padding:{x:20,y:10}}).setOrigin(0.5).setInteractive();
+        
+        btn.on('pointerdown', () => { if(this.sound.context.state === 'suspended') this.sound.context.resume(); this.startGame(); });
+        this.startCont.add([bg, title, sub, btn]);
+
+        this.hudTime = this.add.text(CONFIG.WIDTH/2, 40, "00:00", {fontSize:'40px', color:'#ccc'}).setOrigin(0.5).setVisible(false).setDepth(90);
+        this.hudPhase = this.add.text(CONFIG.WIDTH/2, 80, "DEPLOYMENT", {fontSize:'14px', color:'#aa5'}).setOrigin(0.5).setVisible(false).setDepth(90);
+        this.hudFPS = this.add.text(CONFIG.WIDTH - 20, 40, "FPS: 60", {fontSize:'20px', color:'#00ff00', fontStyle:'bold'}).setOrigin(1, 0.5).setDepth(90).setVisible(false);
+
+        this.spdBtn = this.add.text(CONFIG.WIDTH/2, CONFIG.HEIGHT - 50, "SPEED 1X", {fontSize:'16px', backgroundColor:'#222', padding:8}).setOrigin(0.5).setInteractive().setVisible(false).setDepth(90);
+        this.spdBtn.on('pointerdown', () => {
+            this.timeScale = this.timeScale === 1.0 ? 2.0 : 1.0;
+            this.spdBtn.setText(`SPEED ${this.timeScale}X`);
+            this.spdBtn.setStyle({ color: this.timeScale > 1 ? '#ff0' : '#fff' });
+        });
+
+        this.goCont = this.add.container(0, 0).setVisible(false).setDepth(100);
+        let goBg = this.add.rectangle(CONFIG.WIDTH/2, CONFIG.HEIGHT/2, CONFIG.WIDTH, CONFIG.HEIGHT, 0x000000, 0.9);
+        let goTitle = this.add.text(CONFIG.WIDTH/2, CONFIG.HEIGHT/2 - 80, "M.I.A.", {fontSize:'60px', color:'#f33'}).setOrigin(0.5);
+        
+        this.goStats = this.add.text(CONFIG.WIDTH/2, CONFIG.HEIGHT/2 + 20, "", {
+            fontFamily: 'Courier New', fontSize: '24px', color: '#fff', align: 'center', lineHeight: 32
+        }).setOrigin(0.5);
+
+        let retry = this.add.text(CONFIG.WIDTH/2, CONFIG.HEIGHT/2 + 120, "RETRY", style).setOrigin(0.5).setInteractive();
+        retry.on('pointerdown', () => this.scene.restart());
+        this.goCont.add([goBg, goTitle, this.goStats, retry]);
+    }
+
+    startGame() {
+        this.startCont.setVisible(false);
+        this.hudTime.setVisible(true);
+        this.hudPhase.setVisible(true);
+        this.spdBtn.setVisible(true);
+        this.hudFPS.setVisible(true);
+        this.state.run = true;
+    }
+
+    update(time, delta) {
+        if (!this.state.run) return;
+        const steps = Math.ceil(this.timeScale);
+        for(let s=0; s<steps; s++) this.logicUpdate();
+        this.visualUpdate();
+    }
+
+    logicUpdate() {
+        this.state.frame++;
+        this.state.elapsed = this.state.frame / 60;
+        
+        this.state.radarAngle += 0.01;
+        if (this.state.screenShake > 0) this.state.screenShake -= 0.5;
+
+        let cycle = CONFIG.PHASE_DURATION;
+        let newIndex = Math.floor(this.state.elapsed / cycle);
+        if (newIndex > 5) newIndex = 5;
+        
+        if (newIndex !== this.state.phaseIndex) {
+            this.state.phaseIndex = newIndex;
+            if (newIndex >= 2) { this.turret.crit = true; this.turret.lightning = true; }
+            if (newIndex >= 3) { this.turret.frost = true; }
+            if (newIndex >= 4) { this.turret.sniperUnlocked = true; }
+            this.turret.multi = newIndex <= 2 ? 1 : (newIndex === 3 ? 2 : (newIndex === 4 ? 3 : 4));
+            this.state.phaseName = ["DEPLOYMENT", "SECTOR 2", "HOSTILE", "CONFLICT", "WARZONE", "CRISIS"][newIndex];
+            this.hudPhase.setText(this.state.phaseName);
+            
+            let dCount = this.entities.drones.length;
+            if (newIndex >= 3 && dCount < 1) this.spawnDrone(0);
+            if (newIndex >= 4 && dCount < 2) this.spawnDrone(1);
+            if (newIndex >= 5 && dCount < 4) { this.spawnDrone(2); this.spawnDrone(3); }
+        }
+
+        let m = Math.floor(this.state.elapsed / 60);
+        let s = Math.floor(this.state.elapsed % 60);
+        this.state.timeStr = `${m}:${s<10?'0'+s:s}`;
+        this.hudTime.setText(this.state.timeStr);
+
+        if (this.state.elapsed >= 360) {
+            let pt = this.state.elapsed % CONFIG.PHASE_DURATION;
+            if (pt >= 118 && pt < 118.2 && !this.state.isOverdrive) {
+                this.state.isOverdrive = true;
+                this.state.overdriveEnd = this.state.elapsed + 7.0;
+            }
+        }
+        if (this.state.isOverdrive && this.state.elapsed > this.state.overdriveEnd) this.state.isOverdrive = false;
+
+        this.spawnEnemyLogic();
+        this.spawnMissileLogic();
+        this.updateEnemies();
+        this.updateTurret();
+        this.updateSniper();
+        this.updateBullets();
+        this.updateMissiles();
+        this.updateDrones();
+        this.updateParticles();
+        this.updateShockwaves();
+        this.updateMuzzles();
+        this.updateCrits();
+    }
+
+    spawnEnemyLogic() {
+        let delay = DATA.SPAWN_DELAYS[this.state.phaseIndex];
+        if (this.state.frame % delay !== 0) return;
+        
+        let count = 1;
+        if (this.state.phaseIndex >= 3 && Math.random() < 0.3) count = 2;
+        if (this.state.phaseIndex >= 5 && Math.random() < 0.4) count = 3;
+        const pad = -50;
+        
+        const RATES = [
+            [0, 0, 0, 0], [0, 0, 0, 30], [0, 0, 15, 25],
+            [0, 5, 20, 30], [0, 10, 25, 25], [15, 15, 30, 20]
+        ];
+        let currentRates = RATES[Math.min(this.state.phaseIndex, 5)];
+        let tSplitter = currentRates[0];
+        let tBoss     = tSplitter + currentRates[1];
+        let tDasher   = tBoss + currentRates[2];
+        let tOrbital  = tDasher + currentRates[3];
+
+        for(let k=0; k<count; k++) {
+            let rnd = Math.random() * 100;
+            let type = 'normal';
+            if (rnd < tSplitter) type = 'splitter';
+            else if (rnd < tBoss) type = 'boss';
+            else if (rnd < tDasher) type = 'dasher';
+            else if (rnd < tOrbital) type = 'orbital';
+            
+            let side = Phaser.Math.Between(0,3);
+            let x, y, ox=(Math.random()-0.5)*75, oy=(Math.random()-0.5)*75;
+            if(side===0){x=Math.random()*CONFIG.WIDTH+ox; y=pad+oy;}
+            else if(side===1){x=CONFIG.WIDTH-pad+ox; y=Math.random()*CONFIG.HEIGHT+oy;}
+            else if(side===2){x=Math.random()*CONFIG.WIDTH+ox; y=CONFIG.HEIGHT-pad+oy;}
+            else {x=pad+ox; y=Math.random()*CONFIG.HEIGHT+oy;}
+            
+            let hpMult = DATA.HP_MULTS[this.state.phaseIndex];
+            if (this.state.elapsed > 600) {
+                let intervals = Math.floor((this.state.elapsed - 600) / CONFIG.SCALING_INTERVAL);
+                hpMult *= Math.pow(CONFIG.SCALING_FACTOR, intervals);
+            }
+
+            let hp = 100 * hpMult;
+            let speed = (1.0 + Math.random()*0.75) + (this.state.phaseIndex * 0.25);
+            let r = 12;
+            if (type === 'boss') { hp*=10; speed*=0.5; r=30; }
+            else if (type === 'dasher') { speed*=1.2; }
+            else if (type === 'splitter') { hp*=1.5; speed*=0.8; r=14; }
+            
+            this.spawnEnemy(x, y, type, hp, speed, r);
+        }
+    }
+
+    spawnDrone(idx) {
+        let offsets = [0, -Math.PI/2, Math.PI, Math.PI/2];
+        this.entities.drones.push({ 
+            active: true, baseOffset: offsets[idx], dist: 75, cd: 0, 
+            sprite: this.vis.drones.create(0,0,'drone') 
+        });
+    }
+
+    updateEnemies() {
+        for (let i = this.entities.enemies.length - 1; i >= 0; i--) {
+            let e = this.entities.enemies[i];
+            let dSq = UTILS.distSq(this.center.x, this.center.y, e.x, e.y);
+            
+            if (e.scatterTimer > 0) {
+                e.x += Math.cos(e.angle) * (e.spd * 2.5);
+                e.y += Math.sin(e.angle) * (e.spd * 2.5);
+                e.scatterTimer--;
+            } else {
+                let targetAngle = Math.atan2(this.center.y - e.y, this.center.x - e.x);
+                if (e.type === 'orbital') targetAngle += Math.sin((this.state.frame - e.startFrame)*0.1) * 0.5;
+                if (e.type === 'dasher' && !e.dashed && dSq < CONFIG.DASHER_SENSE) { e.baseSpd *= 1.7; e.dashed = true; }
+                
+                e.angle = Phaser.Math.Angle.RotateTo(e.angle, targetAngle, 0.25);
+                let spd = e.baseSpd;
+                if (e.frozen > 0) { e.frozen--; spd *= 0.5; }
+                e.x += Math.cos(e.angle) * spd;
+                e.y += Math.sin(e.angle) * spd;
+            }
+
+            if (dSq < 400) this.gameOver();
+        }
+    }
+
+    updateTurret() {
+        let closest = null, minDSq = Infinity;
+        for(let e of this.entities.enemies) {
+            let d = UTILS.distSq(this.center.x, this.center.y, e.x, e.y);
+            if(d < minDSq) { minDSq = d; closest = e; }
+        }
+        if(this.lockedTarget && !this.lockedTarget.active) this.lockedTarget = null;
+        if(!this.lockedTarget) this.lockedTarget = closest;
+        else if(minDSq < UTILS.distSq(this.center.x, this.center.y, this.lockedTarget.x, this.lockedTarget.y) - 4000) this.lockedTarget = closest;
+        
+        if(this.lockedTarget) {
+            let t = this.lockedTarget;
+            let dist = Math.sqrt(UTILS.distSq(t.x, t.y, this.center.x, this.center.y));
+            let bSpd = this.state.elapsed >= 600 ? 20 : (12 + (this.state.elapsed/600)*8);
+            let timeToHit = dist / bSpd;
+            let px = t.x + Math.cos(t.angle)*t.spd*timeToHit;
+            let py = t.y + Math.sin(t.angle)*t.spd*timeToHit;
+            let targetAng = Math.atan2(py - this.center.y, px - this.center.x);
+            
+            let diff = targetAng - this.turret.angle;
+            while(diff < -Math.PI) diff += UTILS.PI2; while(diff > Math.PI) diff -= UTILS.PI2;
+            this.turret.angle += diff * 0.25;
+
+            if(this.turret.cd <= 0) {
+                let rate = Math.max(5, 40 - ((this.state.elapsed/600)*35));
+                if(this.state.isOverdrive) rate = Math.max(2, 10 - this.state.phaseIndex);
+                this.turret.cd = rate;
+                this.turret.recoil = 6;
+                this.sound.play('turret');
+                let dmg = CONFIG.BASE_DMG * DATA.DMG_MULTS[this.state.phaseIndex];
+                
+                if(this.turret.crit && Math.random() < 0.15) {
+                    dmg *= 2;
+                    this.spawnCrit(this.center.x + Math.cos(this.turret.angle)*40, this.center.y + Math.sin(this.turret.angle)*40);
+                }
+
+                let spread = this.state.isOverdrive ? 0.1 : 0.05;
+                let startAng = this.turret.angle - (spread*(this.turret.multi-1))/2;
+                
+                for(let k=0; k<this.turret.multi; k++) {
+                    let ang = startAng + spread*k;
+                    let pat = DATA.BARRELS[this.turret.multi] || DATA.BARRELS[1];
+                    let p = pat[k] || {x:0,y:0};
+                    let ca=Math.cos(this.turret.angle), sa=Math.sin(this.turret.angle);
+                    
+                    // V72 FIX: Barrel Tip Offset (60)
+                    let bx = this.center.x + ca*60 - sa*(p.y||0) + ca*(p.x||0);
+                    let by = this.center.y + sa*60 + ca*(p.y||0) + sa*(p.x||0);
+                    this.spawnBullet(bx, by, Math.cos(ang)*bSpd, Math.sin(ang)*bSpd, 60, dmg, false);
+                    
+                    // V72 FIX: Muzzle Flash Offset (65)
+                    let mx = this.center.x + ca*65 - sa*(p.y||0) + ca*(p.x||0);
+                    let my = this.center.y + sa*65 + ca*(p.y||0) + sa*(p.x||0);
+                    this.spawnMuzzle(mx, my);
+                }
+            }
+        } else { this.turret.angle += 0.02; }
+        if(this.turret.cd > 0) this.turret.cd--;
+        if(this.turret.recoil > 0) this.turret.recoil *= 0.8;
+    }
+
+    updateBullets() {
+        for(let i=this.entities.bullets.length-1; i>=0; i--) {
+            let b = this.entities.bullets[i];
+            b.x += b.vx; b.y += b.vy; b.life--;
+            let hit = false;
+            for(let e of this.entities.enemies) {
+                if(UTILS.distSq(b.x, b.y, e.x, e.y) < (e.r+10)**2) {
+                    this.hitEnemy(e, b.dmg, b.vx, b.vy);
+                    hit = true;
+                    
+                    let allowLightning = true;
+                    if (b.isDrone && this.state.elapsed >= 360) allowLightning = false;
+                    if (!b.isDrone && this.state.elapsed >= 480) allowLightning = false;
+                    if (allowLightning && this.turret.lightning && Math.random() < 0.4) {
+                        this.triggerLightning(e);
+                    }
+                    break;
+                }
+            }
+            if(hit || b.life <= 0) {
+                this.killEntity(this.entities.bullets, i, this.pools.bullets);
+            }
+        }
+    }
+
+    updateSniper() {
+        if(!this.turret.sniperUnlocked) return;
+        
+        if(!this.turret.sniperTarget || !this.turret.sniperTarget.active) {
+            let boss = this.entities.enemies.find(e => e.active && e.type === 'boss');
+            if(boss) {
+                this.turret.sniperTarget = boss;
+                this.turret.sniperTargetUid = boss.uid;
+            }
+        }
+        
+        if(this.turret.sniperTarget) {
+            if(this.turret.sniperTarget.uid !== this.turret.sniperTargetUid) {
+                this.turret.sniperTarget = null;
+            }
+        }
+
+        if(this.turret.sniperTarget) {
+            let t = this.turret.sniperTarget;
+            let ang = Math.atan2(t.y - this.center.y, t.x - this.center.x);
+            let diff = ang - this.turret.sniperAngle;
+            while(diff < -Math.PI) diff += UTILS.PI2; while(diff > Math.PI) diff -= UTILS.PI2;
+            this.turret.sniperAngle += diff * 0.075;
+
+            if(this.turret.sniperCd <= 0 && Math.abs(diff) < 0.01) {
+                this.turret.sniperCd = 90;
+                this.turret.sniperRecoil = 20;
+                this.sound.play('sniper');
+                t.hp -= (CONFIG.BASE_DMG * DATA.DMG_MULTS[this.state.phaseIndex]) * 20;
+                this.addShockwave(t.x, t.y, 5, 40, '#00ffff');
+                if(t.hp <= 0) this.killEnemy(t);
+            }
+        }
+        if(this.turret.sniperCd > 0) this.turret.sniperCd--;
+        if(this.turret.sniperRecoil > 0) this.turret.sniperRecoil *= 0.8;
+    }
+
+    spawnMissileLogic() {
+        if (this.state.elapsed < 360) return;
+        let progress = Math.min(1.0, Math.max(0, (this.state.elapsed-360)/240));
+        let rate = Math.floor(120 - (progress*60));
+        if (this.state.frame % rate === 0 && this.entities.enemies.length > 0) {
+            let count = this.state.elapsed >= 480 ? 2 : 1;
+            for(let i=0; i<count; i++) {
+                let a = this.turret.angle + (i===0 ? -1.57 : 1.57);
+                let mx = this.center.x + Math.cos(a)*25;
+                let my = this.center.y + Math.sin(a)*25;
+                this.spawnMissile(mx, my, this.turret.angle, CONFIG.BASE_DMG*DATA.DMG_MULTS[this.state.phaseIndex]*2);
+                if (i===0) this.sound.play('missile');
+            }
+        }
+    }
+
+    updateMissiles() {
+        for(let i=this.entities.missiles.length-1; i>=0; i--) {
+            let m = this.entities.missiles[i];
+            if(m.speed < m.maxSpeed) m.speed += 0.3;
+            if(!m.target || !m.target.active) {
+                let minD = Infinity;
+                for(let e of this.entities.enemies) {
+                    let d = UTILS.distSq(m.x, m.y, e.x, e.y);
+                    if(d < minD) { minD = d; m.target = e; }
+                }
+            }
+            if(m.target) {
+                let ang = Math.atan2(m.target.y - m.y, m.target.x - m.x);
+                let diff = ang - m.angle;
+                while(diff < -Math.PI) diff += UTILS.PI2; while(diff > Math.PI) diff -= UTILS.PI2;
+                m.angle += diff * 0.2;
+            }
+            let mc = Math.cos(m.angle), ms = Math.sin(m.angle);
+            m.x += mc * m.speed; m.y += ms * m.speed;
+            m.life--;
+            
+            if(this.state.frame%3===0) this.spawnParticle(m.x, m.y, 0x555555);
+            
+            let hit = false;
+            for(let e of this.entities.enemies) {
+                if(UTILS.distSq(m.x, m.y, e.x, e.y) < (e.r+15)**2) {
+                    e.hp -= m.dmg; hit = true;
+                    this.addShockwave(m.x, m.y, 10, 80, '#ff5500');
+                    this.state.screenShake = 5;
+                    this.sound.play('explode');
+                    if(e.hp <= 0) this.killEnemy(e);
+                    break;
+                }
+            }
+            if(hit || m.life <= 0) {
+                this.killEntity(this.entities.missiles, i, this.pools.missiles);
+            }
+        }
+    }
+
+    updateDrones() {
+        let elapsed = this.state.elapsed;
+        let dist = 70 + (Math.min(elapsed, 600)/600)*10;
+        let rate = 10 - (Math.min(elapsed, 600)/600)*5;
+        for(let d of this.entities.drones) {
+            let orbit = this.state.radarAngle + d.baseOffset;
+            let dx = this.center.x + Math.cos(orbit)*dist;
+            let dy = this.center.y + Math.sin(orbit)*dist;
+            if(d.sprite) { d.sprite.setPosition(dx, dy); d.sprite.setRotation(orbit); }
+            let target = null, minD = Infinity;
+            for(let e of this.entities.enemies) {
+                let dst = UTILS.distSq(dx, dy, e.x, e.y);
+                if(dst < minD) { minD=dst; target=e; }
+            }
+            if(target && d.cd <= 0) {
+                d.cd = rate;
+                let ang = Math.atan2(target.y - dy, target.x - dx);
+                let dmg = (CONFIG.BASE_DMG * DATA.DMG_MULTS[this.state.phaseIndex]) * 0.5;
+                this.spawnBullet(dx, dy, Math.cos(ang)*20, Math.sin(ang)*20, 40, dmg, true);
+                this.sound.play('drone');
+            }
+            if(d.cd > 0) d.cd--;
+        }
+    }
+    
+    updateParticles() {
+        for(let i=this.entities.particles.length-1; i>=0; i--) {
+            let p = this.entities.particles[i];
+            p.x += p.vx; p.y += p.vy; p.life -= 0.05;
+            if(p.life <= 0) this.killEntity(this.entities.particles, i, this.pools.particles);
+        }
+    }
+    
+    updateMuzzles() {
+        for(let i=this.entities.muzzles.length-1; i>=0; i--) {
+            let m = this.entities.muzzles[i];
+            m.life--;
+            if(m.life <= 0) this.killEntity(this.entities.muzzles, i, this.pools.muzzles);
+        }
+    }
+    
+    updateCrits() {
+         for(let i=this.entities.crits.length-1; i>=0; i--) {
+            let c = this.entities.crits[i];
+            c.y -= 1; c.life--;
+            if(c.life <= 0) this.killEntity(this.entities.crits, i, this.pools.crits);
+        }
+    }
+    
+    updateShockwaves() {
+        for(let i=this.entities.shockwaves.length-1; i>=0; i--) {
+            let s = this.entities.shockwaves[i];
+            s.r += (s.maxR - s.r) * 0.1;
+            s.alpha -= 0.05;
+            if(s.alpha <= 0) this.killEntity(this.entities.shockwaves, i, this.pools.shockwaves);
+        }
+    }
+
+    triggerLightning(source) {
+        let max = this.state.phaseIndex >= 5 ? 6 : 2;
+        let rangeSq = this.state.phaseIndex >= 5 ? 200*200 : 120*120;
+        let count = 0;
+
+        for(let i = this.entities.enemies.length - 1; i >= 0; i--) {
+            let e = this.entities.enemies[i];
+            if(e === source) continue;
+            if(count >= max) break;
+            
+            if(UTILS.distSq(source.x, source.y, e.x, e.y) < rangeSq) {
+                this.spawnLightning(source.x, source.y, e.x, e.y);
+                e.hp -= CONFIG.BASE_DMG * DATA.DMG_MULTS[this.state.phaseIndex] * 0.6;
+                if(e.hp <= 0) this.killEnemy(e);
+                count++;
+            }
+        }
+    }
+
+
+    hitEnemy(e, dmg, kx, ky) {
+        let force = CONFIG.KNOCKBACK * DATA.KB_TURRET[this.state.phaseIndex];
+        let mag = Math.sqrt(kx*kx + ky*ky);
+        e.x += (kx/mag) * force; e.y += (ky/mag) * force;
+        e.hp -= dmg;
+        if (this.turret.frost) {
+        e.frozen = 60;
+        }
+        if(e.sprite) e.sprite.setTint(0xff0000); 
+        for(let k=0; k<5; k++) this.spawnParticle(e.x, e.y, 0xffffff);
+        if(e.hp <= 0) this.killEnemy(e);
+    }
+
+    killEnemy(e) {
+        if (!e.active) return;
+        let idx = this.entities.enemies.indexOf(e);
+        if(idx === -1) return;
+
+        this.state.kills++;
+        this.addShockwave(e.x, e.y, 10, e.r*2, e.type === 'boss' ? '#ff0000' : '#ffffff');
+        
+        if(e.type === 'splitter') {
+            for(let i=0; i<3; i++) {
+                let ang = (i*UTILS.PI2/3) + (Math.random() - 0.5); 
+                this.spawnEnemy(e.x, e.y, 'mini', e.maxHp*0.3, e.baseSpd*1.5, 8);
+                let last = this.entities.enemies[this.entities.enemies.length-1];
+                last.angle = ang; last.scatterTimer = 30;
+            }
+        }
+        this.killEntity(this.entities.enemies, idx, this.pools.enemies);
+    }
+
+    visualUpdate() {
+        let center = this.center;
+        let sx=0, sy=0;
+        if(this.state.screenShake > 0) {
+            sx = (Math.random()-0.5)*this.state.screenShake;
+            sy = (Math.random()-0.5)*this.state.screenShake;
+        }
+
+        if(this.hudFPS.visible) this.hudFPS.setText(`FPS: ${Math.round(this.game.loop.actualFps)} | Pools: ${this.pools.bullets.length}`);
+
+        this.gLaser.clear();
+        if (this.turret.sniperUnlocked && this.turret.sniperTarget && this.turret.sniperTarget.active) {
+            let t = this.turret.sniperTarget;
+            let dist = Phaser.Math.Distance.Between(center.x, center.y, t.x, t.y);
+            let lx = Math.cos(this.turret.sniperAngle);
+            let ly = Math.sin(this.turret.sniperAngle);
+            let isFiring = this.turret.sniperCd > 80;
+            // V73: Updated Yellow Laser Color
+            this.gLaser.lineStyle(isFiring?4:1, isFiring?0xffffaa:0xeebb00, isFiring?1.0:0.3);
+            this.gLaser.beginPath();
+            this.gLaser.moveTo(center.x + sx, center.y + sy);
+            this.gLaser.lineTo(center.x + sx + lx * dist, center.y + sy + ly * dist);
+            this.gLaser.strokePath();
+        }
+
+        this.gRadar.clear();
+        this.gRadar.fillStyle(0x00ff00, 0.1);
+        this.gRadar.slice(center.x, center.y, 1000, this.state.radarAngle, this.state.radarAngle + 0.5, false);
+        this.gRadar.fillPath();
+        this.gRadar.setPosition(sx, sy);
+
+        if(this.turret.sniperUnlocked) {
+            this.visSniperGun.setVisible(true);
+            let sRecoil = this.turret.sniperRecoil;
+            let rx = Math.cos(this.turret.sniperAngle) * -sRecoil;
+            let ry = Math.sin(this.turret.sniperAngle) * -sRecoil;
+            this.visSniperGun.setPosition(center.x + rx + sx, center.y + ry + sy);
+            this.visSniperGun.setRotation(this.turret.sniperAngle);
+        }
+
+        this.gEnemyOverlay.clear();
+        for(let e of this.entities.enemies) {
+            e.sprite.setPosition(e.x + sx, e.y + sy);
+            e.sprite.setRotation(e.angle);
+
+             if(e.hitTimer > 0) {
+                e.sprite.setTint(0xff0000);
+                e.hitTimer--;
+            } else if (e.frozen > 0) {
+                e.sprite.setTint(0x00ffff);
+            } else {
+                if(e.type === 'mini') e.sprite.setTint(0xffaaaa);
+                else e.sprite.clearTint();
+            }
+
+            if (e.type === 'boss') {
+                let hpPct = Math.max(0, e.hp / e.maxHp);
+                this.gEnemyOverlay.lineStyle(4, 0x00ff00);
+                this.gEnemyOverlay.beginPath();
+                this.gEnemyOverlay.arc(e.x + sx, e.y + sy, 40, Phaser.Math.DegToRad(-90), Phaser.Math.DegToRad(-90 + (360 * hpPct)));
+                this.gEnemyOverlay.strokePath();
+            }
+        }
+
+        for(let b of this.entities.bullets) {
+            b.sprite.setPosition(b.x + sx, b.y + sy);
+            b.sprite.setRotation(Math.atan2(b.vy, b.vx));
+            if(!b.isDrone) b.sprite.setTint(DATA.PHASE_COLORS[this.state.phaseIndex]);
+        }
+
+        for(let m of this.entities.missiles) {
+            m.sprite.setPosition(m.x + sx, m.y + sy);
+            m.sprite.setRotation(m.angle);
+        }
+        
+        for(let p of this.entities.particles) {
+            p.sprite.setPosition(p.x + sx, p.y + sy);
+            p.sprite.setAlpha(p.life);
+        }
+        
+        for(let m of this.entities.muzzles) {
+            m.sprite.setPosition(m.x + sx, m.y + sy);
+            m.sprite.setAlpha(m.life/4);
+        }
+        
+        for(let c of this.entities.crits) {
+            c.sprite.setPosition(c.x + sx, c.y + sy);
+            c.sprite.setAlpha(c.life/30);
+        }
+
+        this.gTurretBarrels.clear();
+        this.gTurretBarrels.setPosition(center.x + sx, center.y + sy);
+        this.gTurretBarrels.setRotation(this.turret.angle);
+        this.gTurretBarrels.fillStyle(0x333333);
+        let bLen = 50 - Math.max(0, this.turret.recoil);
+        let multi = this.turret.multi;
+        
+        if(multi === 1) { this.gTurretBarrels.fillRect(10, -3.5, bLen, 7); }
+        else if (multi === 2) { this.gTurretBarrels.fillRect(10, -9, bLen, 7); this.gTurretBarrels.fillRect(10, 2, bLen, 7); }
+        else if (multi === 3) { this.gTurretBarrels.fillRect(10, -12, bLen, 7); this.gTurretBarrels.fillRect(10, -3.5, bLen+10, 7); this.gTurretBarrels.fillRect(10, 5, bLen, 7); }
+        else { this.gTurretBarrels.fillRect(10, -15, bLen, 7); this.gTurretBarrels.fillRect(10, -5, bLen+8, 7); this.gTurretBarrels.fillRect(10, -2, bLen+8, 7); this.gTurretBarrels.fillRect(10, 8, bLen, 7); }
+
+        let recoilX = Math.cos(this.turret.angle) * -this.turret.recoil;
+        let recoilY = Math.sin(this.turret.angle) * -this.turret.recoil;
+        this.turret.visHead.setPosition(center.x + recoilX + sx, center.y + recoilY + sy);
+        this.turret.visHead.setRotation(this.turret.angle);
+        this.turret.visBase.setPosition(center.x + sx, center.y + sy);
+
+        this.gLightning.clear();
+        this.gLightning.lineStyle(2, 0x00aaff, 0.8);
+        for(let l of this.entities.lightnings) {
+            let path = new Phaser.Curves.Path(l.x1 + sx, l.y1 + sy);
+            for(let i=1; i<=10; i++) {
+                let t = i/10;
+                let tx = l.x1 + (l.x2 - l.x1)*t; let ty = l.y1 + (l.y2 - l.y1)*t;
+                path.lineTo(tx + (l.offsets[i]||0), ty + (l.offsets[i]||0));
+            }
+            path.draw(this.gLightning);
+            l.life--;
+            if(l.life <= 0) this.killEntity(this.entities.lightnings, this.entities.lightnings.indexOf(l), this.pools.lightnings);
+        }
+
+        this.gShockwave.clear();
+        this.gShockwave.setPosition(sx, sy);
+        for(let s of this.entities.shockwaves) {
+            this.gShockwave.fillStyle(s.color, s.alpha * 0.2); 
+            this.gShockwave.fillCircle(s.x, s.y, s.r);
+            this.gShockwave.lineStyle(2, 0xffffff, s.alpha * 0.4); 
+            this.gShockwave.strokeCircle(s.x, s.y, s.r);
+        }
+    }
+
+    gameOver() {
+        this.state.run = false;
+        this.goCont.setVisible(true);
+        this.hudTime.setVisible(false);
+        this.spdBtn.setVisible(false);
+        this.hudFPS.setVisible(false);
+        this.goStats.setText(`SURVIVED: ${this.state.timeStr}\nKILLS: ${this.state.kills}`);
+    }
+}
+
+const config = {
+    type: Phaser.AUTO, width: CONFIG.WIDTH, height: CONFIG.HEIGHT,
+    backgroundColor: '#050a05', parent: 'game-container', scene: MainScene,
+    scale: { mode: Phaser.Scale.FIT, autoCenter: Phaser.Scale.CENTER_BOTH }
+};
+
+const game = new Phaser.Game(config);
+</script>
+</body>
+</html>
