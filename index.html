@@ -3,35 +3,19 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>Turret V73.1 - Clean</title>
-    <script src="phaser.min.js"></script>
+    <title>Turret V73.9 - Final Clean</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/phaser/3.90.0/phaser.min.js"></script>
     <style>
         html, body {
-            width: 100%;
-            height: 100%;
-            margin: 0;
-            padding: 0;
-            background-color: #000;
-            overflow: hidden;
-            touch-action: none;
+            width: 100%; height: 100%; margin: 0; padding: 0;
+            background-color: #000; overflow: hidden; touch-action: none;
         }
         #game-container {
-            position: absolute;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            width: 100%;
-            height: 100%;
+            position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+            display: flex; justify-content: center; align-items: center;
+            width: 100%; height: 100%;
         }
-        canvas {
-            border: 1px solid #333;
-            box-shadow: 0 0 20px rgba(0, 255, 0, 0.1);
-            image-rendering: pixelated;
-        }
+        canvas { border: 1px solid #333; }
     </style>
 </head>
 <body>
@@ -39,24 +23,22 @@
 <div id="game-container"></div>
 
 <script>
-    const CONFIG = {
-        WIDTH: 720,
-        HEIGHT: 1280,
-        BASE_DMG: 100,
-        KNOCKBACK: 4,
-        PHASE_DURATION: 120,
-        ELITE_START: 840,
-        DASHER_SENSE: 90000,
-        SCALING_FACTOR: 1.025,
-        SCALING_INTERVAL: 10,
-        GRID_SIZE: 150
-    };
+    const W = 720;
+    const H = 1280;
+    const BASE_DMG = 100;
+    const PHASE_DURATION = 120;
+    const DASHER_SENSE = 90000;
+    const SCALING_FACTOR = 1.025;
+    const SCALING_INTERVAL = 10;
+    const GRID_SIZE = 150;
+    
+    const { PI, sin, cos, atan2, sqrt, abs, min, max, random } = Math;
+    const PI2 = PI * 2;
 
     const DATA = {
         PHASE_COLORS: [0xffffff, 0xaaffaa, 0xffff00, 0xffaa00, 0xff5555, 0xff0000],
         DMG_MULTS: [1.0, 1.5, 2.0, 2.5, 3.0, 3.5],
         HP_MULTS: [1.0, 1.5, 2.0, 2.5, 3.0, 3.5],
-        KB_TURRET: [0.1, 0.2, 0.4, 0.6, 0.9, 1.2],
         SPAWN_DELAYS: [50, 40, 30, 20, 10, 10],
         BARRELS: {
             1: [{ x: 0, y: 0 }],
@@ -65,227 +47,201 @@
             4: [{ x: 0, y: -11.5 }, { x: 8, y: -1.5 }, { x: 8, y: 1.5 }, { x: 0, y: 11.5 }]
         },
         SPAWN_RATES: [
-            [0, 0, 0, 0],
-            [0, 0, 0, 30],
-            [0, 0, 15, 25],
-            [0, 5, 20, 30],
-            [0, 10, 25, 25],
-            [15, 15, 30, 20]
+            [0, 0, 0, 0], [0, 0, 0, 30], [0, 0, 15, 25],
+            [0, 5, 20, 30], [0, 10, 25, 25], [15, 15, 30, 20]
         ]
     };
 
     const UTILS = {
-        PI2: Math.PI * 2,
         distSq: (x1, y1, x2, y2) => (x1 - x2) ** 2 + (y1 - y2) ** 2
     };
 
     const AssetFactory = {
         generate: function(textures) {
-            const create = (key, w, h, fn) => {
-                if (textures.exists(key)) return;
-                const c = textures.createCanvas(key, w, h);
-                fn(c.context, w, h);
-                c.refresh();
+            const ATLAS_W = 1024;
+            const ATLAS_H = 1024;
+            
+            this.createSeparate(textures, 'background', W, H, ctx => {
+                ctx.fillStyle = '#050a05'; ctx.fillRect(0, 0, W, H);
+                ctx.translate(W / 2, H / 2);
+                ctx.strokeStyle = '#1f2f1f'; ctx.lineWidth = 1; ctx.beginPath();
+                for (let r = 100; r < 1000; r += 100) ctx.arc(0, 0, r, 0, PI2);
+                ctx.moveTo(0, -1000); ctx.lineTo(0, 1000); ctx.moveTo(-1000, 0); ctx.lineTo(1000, 0); ctx.stroke();
+            });
+
+            this.createSeparate(textures, 'shockwave_tex', 128, 128, ctx => {
+                ctx.translate(64, 64); ctx.beginPath(); ctx.arc(0, 0, 60, 0, PI2);
+                ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 4; ctx.stroke();
+            });
+
+            if (textures.exists('atlas')) return;
+            const atlasCanvas = textures.createCanvas('atlas', ATLAS_W, ATLAS_H);
+            const ctx = atlasCanvas.context;
+
+            const drawAt = (key, x, y, w, h, drawFn) => {
+                ctx.save();
+                ctx.translate(x, y); 
+                ctx.beginPath(); ctx.rect(0, 0, w, h); ctx.clip(); 
+                drawFn(ctx, w, h);
+                ctx.restore();
+                atlasCanvas.add(key, 0, x, y, w, h);
             };
 
-            create('background', CONFIG.WIDTH, CONFIG.HEIGHT, ctx => {
-                ctx.fillStyle = '#050a05';
-                ctx.fillRect(0, 0, CONFIG.WIDTH, CONFIG.HEIGHT);
-                ctx.translate(CONFIG.WIDTH / 2, CONFIG.HEIGHT / 2);
-                ctx.strokeStyle = '#1f2f1f';
-                ctx.lineWidth = 1;
-                ctx.beginPath();
-                for (let r = 100; r < 1000; r += 100) ctx.arc(0, 0, r, 0, UTILS.PI2);
-                ctx.moveTo(0, -1000); ctx.lineTo(0, 1000);
-                ctx.moveTo(-1000, 0); ctx.lineTo(1000, 0);
-                ctx.stroke();
+            let cy = 0;
+            drawAt('turretBase', 0, cy, 80, 80, (c) => {
+                c.translate(40,40); c.beginPath(); c.arc(0,0,34,0, PI2); c.fillStyle='#111'; c.fill();
+                c.beginPath(); c.arc(0,0,30,0, PI2); c.fillStyle='#2b2f2b'; c.fill();
+                c.lineWidth=3; c.strokeStyle='#444'; c.stroke();
+                c.fillStyle='#1a1f1a';
+                for(let i=0;i<6;i++) { c.save(); c.rotate(i* PI2/6); c.translate(22,0); c.fillRect(-4,-6,8,12); c.restore(); }
+                c.beginPath(); c.arc(0,0,10,0, PI2); c.fillStyle='#151915'; c.fill();
             });
 
-            create('sniper_weapon', 100, 30, ctx => {
-                ctx.translate(30, 15);
-                ctx.fillStyle = '#2a3a2a'; ctx.fillRect(20, -4, 60, 8);
-                ctx.fillStyle = '#3a4a3a'; ctx.fillRect(20, -1, 55, 2);
-                ctx.fillStyle = '#1a2a1a'; ctx.beginPath();
-                ctx.moveTo(-10, -8); ctx.lineTo(30, -8); ctx.lineTo(40, -4); ctx.lineTo(40, 4); ctx.lineTo(30, 8); ctx.lineTo(-10, 8);
-                ctx.fill();
-                ctx.fillStyle = '#4a5a4a'; ctx.fillRect(-5, -6, 30, 2); ctx.fillRect(-5, 4, 30, 2);
-                ctx.fillStyle = '#aa8800'; ctx.beginPath(); ctx.arc(-15, 0, 14, 0, UTILS.PI2); ctx.fill();
-                ctx.fillStyle = '#eebb00'; ctx.beginPath(); ctx.arc(-15, 0, 8, 0, UTILS.PI2); ctx.fill();
+            drawAt('turretHead', 85, cy, 54, 54, (c) => {
+                c.translate(27,27);
+                let g = c.createLinearGradient(0,-25,0,25); g.addColorStop(0,'#3b4235'); g.addColorStop(1,'#3b4235');
+                c.fillStyle=g; c.fillRect(-20,-20,40,40);
+                c.strokeStyle='#1a1f1a'; c.lineWidth=2; c.strokeRect(-20,-20,40,40);
+                c.fillStyle='#eebb00'; c.beginPath(); c.moveTo(-4,-18); c.lineTo(8,-18); c.lineTo(2,18); c.lineTo(-10,18); c.fill();
             });
 
-            create('bullet', 32, 6, ctx => {
-                let g = ctx.createLinearGradient(0, 0, 32, 0);
-                g.addColorStop(0, 'rgba(255,255,255,0)');
-                g.addColorStop(1, 'rgba(255,255,255,1)');
-                ctx.fillStyle = g;
-                ctx.fillRect(0, 1, 32, 4);
+            drawAt('sniper_weapon', 145, cy, 100, 30, (c) => {
+                c.translate(30,15); c.fillStyle='#2a3a2a'; c.fillRect(20,-4,60,8);
+                c.fillStyle='#3a4a3a'; c.fillRect(20,-1,55,2);
+                c.fillStyle='#1a2a1a'; c.beginPath(); c.moveTo(-10,-8); c.lineTo(30,-8); c.lineTo(40,-4); c.lineTo(40,4); c.lineTo(30,8); c.lineTo(-10,8); c.fill();
+                c.fillStyle='#4a5a4a'; c.fillRect(-5,-6,30,2); c.fillRect(-5,4,30,2);
+                c.fillStyle='#aa8800'; c.beginPath(); c.arc(-15,0,14,0, PI2); c.fill();
+                c.fillStyle='#eebb00'; c.beginPath(); c.arc(-15,0,8,0, PI2); c.fill();
             });
 
-            create('bullet_drone', 12, 6, ctx => {
-                let g = ctx.createLinearGradient(0, 0, 12, 0);
-                g.addColorStop(0, 'rgba(0,255,255,0)');
-                g.addColorStop(1, 'rgba(200,255,255,1)');
-                ctx.fillStyle = g;
-                ctx.fillRect(0, 1, 12, 4);
+            drawAt('reticle', 250, cy, 40, 40, (c) => {
+                c.translate(20,20);
+                c.strokeStyle = '#eebb00'; c.lineWidth = 2; 
+                c.beginPath();
+                c.moveTo(-15, -8); c.lineTo(-15, -15); c.lineTo(-8, -15);
+                c.moveTo(8, -15); c.lineTo(15, -15); c.lineTo(15, -8);
+                c.moveTo(-15, 8); c.lineTo(-15, 15); c.lineTo(-8, 15);
+                c.moveTo(8, 15); c.lineTo(15, 15); c.lineTo(15, 8);
+                c.stroke();
+                c.fillStyle = '#ff3333'; c.beginPath(); c.arc(0,0,2,0, PI2); c.fill();
             });
 
-            create('normal', 32, 32, ctx => {
-                ctx.translate(16, 16);
-                ctx.fillStyle = '#002200'; ctx.beginPath();
-                ctx.moveTo(0, -14); ctx.lineTo(12, 0); ctx.lineTo(0, 14); ctx.lineTo(-12, 0); ctx.closePath(); ctx.fill();
-                ctx.lineWidth = 2; ctx.strokeStyle = '#00ff00'; ctx.stroke();
-                ctx.fillStyle = '#00aa00'; ctx.beginPath();
-                ctx.moveTo(0, -8); ctx.lineTo(8, 0); ctx.lineTo(0, 8); ctx.lineTo(-8, 0); ctx.closePath(); ctx.fill();
-                ctx.fillStyle = '#ffffff'; ctx.beginPath(); ctx.arc(0, 0, 2, 0, UTILS.PI2); ctx.fill();
+            drawAt('sniper_projectile', 300, cy, 80, 16, (c) => {
+                let g = c.createLinearGradient(0, 0, 80, 0);
+                g.addColorStop(0, 'rgba(255, 255, 255, 0)');
+                g.addColorStop(0.3, '#ffcc00');
+                g.addColorStop(0.8, '#ffffaa');
+                g.addColorStop(1, '#ffffff');
+                c.fillStyle = g;
+                c.beginPath();
+                c.moveTo(0, 8);
+                c.lineTo(30, 2);
+                c.lineTo(80, 8);
+                c.lineTo(30, 14);
+                c.fill();
             });
 
-            create('dasher', 32, 32, ctx => {
-                ctx.translate(16, 16);
-                ctx.fillStyle = '#333300'; ctx.beginPath();
-                ctx.moveTo(-10, -7); ctx.lineTo(10, 0); ctx.lineTo(-10, 7); ctx.fill();
-                ctx.lineWidth = 2; ctx.strokeStyle = '#ffff00'; ctx.stroke();
-                ctx.fillStyle = '#ffffff'; ctx.beginPath(); ctx.arc(10, 0, 2, 0, UTILS.PI2); ctx.fill();
-            });
-
-            create('boss', 80, 80, ctx => {
-                ctx.translate(40, 40);
-                ctx.beginPath(); ctx.arc(0, 0, 32, 0, UTILS.PI2); ctx.fillStyle = '#221100'; ctx.fill();
-                ctx.lineWidth = 4; ctx.strokeStyle = '#ffaa00'; ctx.stroke();
-                ctx.beginPath(); ctx.arc(0, 0, 24, 0, UTILS.PI2); ctx.fillStyle = '#664400'; ctx.fill();
-                ctx.beginPath(); ctx.arc(0, 0, 11, 0, UTILS.PI2); ctx.fillStyle = '#ffddaa'; ctx.fill();
-                ctx.fillStyle = '#ffffff'; ctx.beginPath(); ctx.arc(0, 0, 4, 0, UTILS.PI2); ctx.fill();
-            });
-
-            create('orbital', 32, 32, ctx => {
-                ctx.translate(16, 16);
-                ctx.fillStyle = '#110022'; ctx.beginPath(); ctx.arc(0, 0, 12, 0, UTILS.PI2); ctx.fill();
-                ctx.lineWidth = 2; ctx.strokeStyle = '#aa00ff'; ctx.stroke();
-                ctx.fillStyle = '#ffccff'; ctx.beginPath(); ctx.arc(0, 0, 4, 0, UTILS.PI2); ctx.fill();
-            });
-
-            create('splitter', 40, 40, ctx => {
-                ctx.translate(20, 20);
-                ctx.fillStyle = '#2a0500'; ctx.beginPath(); ctx.arc(0, 0, 16, 0, UTILS.PI2); ctx.fill();
-                ctx.lineWidth = 2; ctx.strokeStyle = '#ff8800'; ctx.stroke();
-                ctx.fillStyle = '#ff3b3b';
-                for (let i = 0; i < 3; i++) {
-                    ctx.save(); ctx.rotate(i * (UTILS.PI2 / 3)); ctx.translate(0, -8);
-                    ctx.beginPath(); ctx.arc(0, 0, 4, 0, UTILS.PI2); ctx.fill(); ctx.restore();
-                }
-            });
-
-            create('mini', 16, 16, ctx => {
-                ctx.translate(8, 8);
-                ctx.fillStyle = '#333300'; ctx.beginPath();
-                ctx.moveTo(0, -6); ctx.lineTo(5, 0); ctx.lineTo(0, 6); ctx.lineTo(-5, 0); ctx.fill();
-                ctx.strokeStyle = '#ffff00'; ctx.lineWidth = 1; ctx.stroke();
-                ctx.fillStyle = '#ffffff'; ctx.beginPath(); ctx.arc(0, 0, 2, 0, UTILS.PI2); ctx.fill();
-            });
-
-            create('turretBase', 80, 80, ctx => {
-                ctx.translate(40, 40);
-                ctx.beginPath(); ctx.arc(0, 0, 34, 0, UTILS.PI2); ctx.fillStyle = '#111'; ctx.fill();
-                ctx.beginPath(); ctx.arc(0, 0, 30, 0, UTILS.PI2); ctx.fillStyle = '#2b2f2b'; ctx.fill();
-                ctx.lineWidth = 3; ctx.strokeStyle = '#444'; ctx.stroke();
-                ctx.fillStyle = '#1a1f1a';
-                for (let i = 0; i < 6; i++) {
-                    ctx.save(); ctx.translate(Math.cos(i * UTILS.PI2 / 6) * 22, Math.sin(i * UTILS.PI2 / 6) * 22);
-                    ctx.rotate(i * UTILS.PI2 / 6); ctx.fillRect(-4, -6, 8, 12); ctx.restore();
-                }
-                ctx.beginPath(); ctx.arc(0, 0, 10, 0, UTILS.PI2); ctx.fillStyle = '#151915'; ctx.fill();
-            });
-
-            create('turretHead', 54, 54, ctx => {
-                ctx.translate(27, 27);
-                let g = ctx.createLinearGradient(0, -25, 0, 25);
-                g.addColorStop(0, '#3b4235'); g.addColorStop(0.5, '#556b2f'); g.addColorStop(1, '#3b4235');
-                ctx.fillStyle = g; ctx.fillRect(-20, -20, 40, 40);
-                ctx.strokeStyle = '#1a1f1a'; ctx.lineWidth = 2; ctx.strokeRect(-20, -20, 40, 40);
-                ctx.fillStyle = '#eebb00'; ctx.beginPath();
-                ctx.moveTo(-4, -18); ctx.lineTo(8, -18); ctx.lineTo(2, 18); ctx.lineTo(-10, 18); ctx.fill();
-            });
-
-            const drawBarrel = (ctx, multi) => {
-                ctx.fillStyle = '#333333';
-                let bLen = 50;
-
-                if (multi === 1) {
-                    ctx.fillRect(10, -3.5, bLen, 7);
-                } else if (multi === 2) {
-                    ctx.fillRect(10, -9, bLen, 7);
-                    ctx.fillRect(10, 2, bLen, 7);
-                } else if (multi === 3) {
-                    ctx.fillRect(10, -12, bLen, 7);
-                    ctx.fillRect(10, -3.5, bLen + 10, 7);
-                    ctx.fillRect(10, 5, bLen, 7);
-                } else {
-                    ctx.fillRect(10, -15, bLen, 7);
-                    ctx.fillRect(10, -5, bLen + 8, 7);
-                    ctx.fillRect(10, -2, bLen + 8, 7);
-                    ctx.fillRect(10, 8, bLen, 7);
-                }
+            cy += 90;
+            const drawBarrel = (c, m) => {
+                c.fillStyle='#333'; let L=50;
+                if(m===1) c.fillRect(10,-3.5,L,7);
+                else if(m===2) { c.fillRect(10,-9,L,7); c.fillRect(10,2,L,7); }
+                else if(m===3) { c.fillRect(10,-12,L,7); c.fillRect(10,-3.5,L+10,7); c.fillRect(10,5,L,7); }
+                else { c.fillRect(10,-15,L,7); c.fillRect(10,-5,L+8,7); c.fillRect(10,-2,L+8,7); c.fillRect(10,8,L,7); }
             };
-
-            for (let i = 1; i <= 4; i++) {
-                create('barrel_' + i, 120, 80, ctx => {
-                    ctx.translate(0, 40);
-                    drawBarrel(ctx, i);
-                });
+            for(let i=1; i<=4; i++) {
+                drawAt('barrel_'+i, (i-1)*125, cy, 120, 80, (c) => { c.translate(0,40); drawBarrel(c, i); });
             }
 
-            create('missile', 24, 16, ctx => {
-                ctx.translate(12, 8);
-                ctx.fillStyle = '#2b2f33'; ctx.fillRect(-9, -3, 18, 6);
-                ctx.fillStyle = '#c0c0c0'; ctx.beginPath(); ctx.moveTo(9, 0); ctx.lineTo(3, -4); ctx.lineTo(3, 4); ctx.fill();
-                ctx.fillStyle = '#556b2f'; ctx.beginPath(); ctx.moveTo(-9, -3); ctx.lineTo(-13, -6); ctx.lineTo(-9, 0); ctx.fill();
-                ctx.beginPath(); ctx.moveTo(-9, 3); ctx.lineTo(-13, 6); ctx.lineTo(-9, 0); ctx.fill();
-                ctx.fillStyle = '#eebb00'; ctx.fillRect(-2, -3, 3, 6);
+            cy += 90;
+            drawAt('boss', 0, cy, 80, 80, (c) => {
+                c.translate(40,40); c.beginPath(); c.arc(0,0,32,0, PI2); c.fillStyle='#221100'; c.fill();
+                c.lineWidth=4; c.strokeStyle='#ffaa00'; c.stroke();
+                c.beginPath(); c.arc(0,0,11,0, PI2); c.fillStyle='#ffddaa'; c.fill();
+                c.fillStyle='#fff'; c.beginPath(); c.arc(0,0,4,0, PI2); c.fill();
+            });
+            drawAt('splitter', 85, cy, 40, 40, (c) => {
+                c.translate(20,20); c.fillStyle='#2a0500'; c.beginPath(); c.arc(0,0,16,0, PI2); c.fill();
+                c.lineWidth=2; c.strokeStyle='#ff8800'; c.stroke(); c.fillStyle='#ff3b3b';
+                for(let i=0;i<3;i++) { c.save(); c.rotate(i* PI2/3); c.translate(0,-8); c.beginPath(); c.arc(0,0,4,0, PI2); c.fill(); c.restore(); }
+            });
+            
+            drawAt('normal', 130, cy, 36, 36, (c) => {
+                c.translate(18,18); c.fillStyle='#002200'; 
+                c.beginPath(); c.moveTo(0,-14); c.lineTo(12,0); c.lineTo(0,14); c.lineTo(-12,0); c.closePath(); c.fill();
+                c.lineWidth=2; c.strokeStyle='#00ff00'; c.stroke(); 
+                c.fillStyle='#00aa00'; c.beginPath(); c.moveTo(0,-8); c.lineTo(8,0); c.lineTo(0,8); c.lineTo(-8,0); c.closePath(); c.fill();
+                c.fillStyle='#fff'; c.beginPath(); c.arc(0,0,2,0, PI2); c.fill();
+            });
+            
+            drawAt('dasher', 170, cy, 36, 36, (c) => {
+                c.translate(18,18); c.fillStyle='#333300'; 
+                c.beginPath(); c.moveTo(-10,-7); c.lineTo(10,0); c.lineTo(-10,7); c.closePath(); c.fill();
+                c.lineWidth=2; c.strokeStyle='#ffff00'; c.stroke(); 
+                c.fillStyle='#fff'; c.beginPath(); c.arc(10,0,2,0, PI2); c.fill();
+            });
+            
+            drawAt('orbital', 210, cy, 32, 32, (c) => {
+                c.translate(16,16); c.fillStyle='#110022'; c.beginPath(); c.arc(0,0,12,0, PI2); c.fill();
+                c.lineWidth=2; c.strokeStyle='#aa00ff'; c.stroke(); c.fillStyle='#ffccff'; c.beginPath(); c.arc(0,0,4,0, PI2); c.fill();
+            });
+            
+            drawAt('mini', 245, cy, 16, 16, (c) => {
+                c.translate(8,8); c.fillStyle='#333300'; c.beginPath(); c.moveTo(0,-6); c.lineTo(5,0); c.lineTo(0,6); c.lineTo(-5,0); c.fill();
+                c.strokeStyle='#ffff00'; c.lineWidth=1; c.stroke(); c.fillStyle='#fff'; c.beginPath(); c.arc(0,0,2,0, PI2); c.fill();
             });
 
-            create('drone', 24, 24, ctx => {
-                ctx.translate(12, 12);
-                let g = ctx.createLinearGradient(0, -10, 0, 10);
-                g.addColorStop(0, '#202620'); g.addColorStop(0.5, '#3f4b34'); g.addColorStop(1, '#202620');
-                ctx.fillStyle = g; ctx.beginPath(); ctx.arc(0, 0, 9, 0, UTILS.PI2); ctx.fill();
-                ctx.strokeStyle = '#667766'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(0, 0, 9, 0, UTILS.PI2); ctx.stroke();
-                ctx.strokeStyle = '#111'; ctx.beginPath(); ctx.moveTo(-8, 0); ctx.lineTo(8, 0); ctx.moveTo(0, -8); ctx.lineTo(0, 8); ctx.stroke();
-                ctx.fillStyle = '#eebb00'; ctx.beginPath(); ctx.arc(0, 0, 2, 0, UTILS.PI2); ctx.fill();
-                ctx.beginPath(); ctx.arc(6, 0, 1.5, 0, UTILS.PI2); ctx.fill();
-                ctx.beginPath(); ctx.arc(-6, 0, 1.5, 0, UTILS.PI2); ctx.fill();
+            cy += 90;
+            drawAt('bullet', 0, cy, 32, 6, (c) => {
+                let g=c.createLinearGradient(0,0,32,0); g.addColorStop(0,'rgba(255,255,255,0)'); g.addColorStop(1,'#fff');
+                c.fillStyle=g; c.fillRect(0,1,32,4);
+            });
+            drawAt('bullet_drone', 40, cy, 12, 6, (c) => {
+                let g=c.createLinearGradient(0,0,12,0); g.addColorStop(0,'rgba(0,255,255,0)'); g.addColorStop(1,'#aff');
+                c.fillStyle=g; c.fillRect(0,1,12,4);
+            });
+            drawAt('missile', 60, cy, 24, 16, (c) => {
+                c.translate(12,8); c.fillStyle='#2b2f33'; c.fillRect(-9,-3,18,6); c.fillStyle='#c0c'; c.beginPath(); c.moveTo(9,0); c.lineTo(3,-4); c.lineTo(3,4); c.fill();
+                c.fillStyle='#562'; c.beginPath(); c.moveTo(-9,-3); c.lineTo(-13,-6); c.lineTo(-9,0); c.fill(); c.beginPath(); c.moveTo(-9,3); c.lineTo(-13,6); c.lineTo(-9,0); c.fill();
+                c.fillStyle='#eb0'; c.fillRect(-2,-3,3,6);
+            });
+            drawAt('drone', 90, cy, 24, 24, (c) => {
+                c.translate(12,12); let g=c.createLinearGradient(0,-10,0,10); g.addColorStop(0,'#222'); g.addColorStop(1,'#222');
+                c.fillStyle=g; c.beginPath(); c.arc(0,0,9,0, PI2); c.fill();
+                c.strokeStyle='#676'; c.lineWidth=2; c.stroke(); c.strokeStyle='#111'; c.beginPath(); c.moveTo(-8,0); c.lineTo(8,0); c.moveTo(0,-8); c.lineTo(0,8); c.stroke();
+                c.fillStyle='#eb0'; c.beginPath(); c.arc(0,0,2,0, PI2); c.fill(); c.beginPath(); c.arc(6,0,1.5,0, PI2); c.fill(); c.beginPath(); c.arc(-6,0,1.5,0, PI2); c.fill();
+            });
+            drawAt('muzzle', 120, cy, 16, 16, (c) => {
+                c.translate(8,8); c.fillStyle='#ffe4aa'; c.beginPath(); c.arc(0,0,6,0, PI2); c.fill();
+            });
+            drawAt('particle', 140, cy, 4, 4, (c) => { c.fillStyle='#fff'; c.fillRect(0,0,4,4); });
+            
+            drawAt('crit', 150, cy, 40, 40, (c) => {
+                c.translate(20,20); c.font='bold 24px Courier'; c.fillStyle='#f00'; c.textAlign='center'; c.textBaseline='middle'; c.fillText('!',0,0);
             });
 
-            create('particle', 4, 4, ctx => { ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, 4, 4); });
-
-            create('muzzle', 16, 16, ctx => {
-                ctx.translate(8, 8); ctx.fillStyle = '#ffe4aa'; ctx.beginPath(); ctx.arc(0, 0, 6, 0, UTILS.PI2); ctx.fill();
-            });
-
-            create('crit', 30, 30, ctx => {
-                ctx.translate(15, 15);
-                ctx.font = 'bold 24px Courier'; ctx.fillStyle = '#ff0000';
-                ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-                ctx.fillText('!', 0, 0);
-            });
-
-            for (let i = 0; i <= 50; i++) {
-                create('bar_ring_' + i, 90, 90, ctx => {
-                    ctx.translate(45, 45);
-                    ctx.beginPath();
-                    ctx.arc(0, 0, 40, 0, UTILS.PI2);
-                    ctx.lineWidth = 4;
-                    ctx.strokeStyle = 'rgba(0,0,0,0.3)';
-                    ctx.stroke();
-
-                    if (i > 0) {
-                        ctx.beginPath();
-                        let pct = i / 50;
-                        ctx.arc(0, 0, 40, -Math.PI / 2, -Math.PI / 2 + (UTILS.PI2 * pct));
-                        ctx.lineWidth = 4;
-                        ctx.strokeStyle = '#ffffff';
-                        ctx.stroke();
+            cy += 50;
+            let bx = 0, by = cy;
+            for(let i=0; i<=50; i++) {
+                drawAt('bar_ring_'+i, bx, by, 90, 90, (c) => {
+                    c.translate(45,45); c.beginPath(); c.arc(0,0,40,0, PI2); c.lineWidth=4; c.strokeStyle='rgba(0,0,0,0.3)'; c.stroke();
+                    if(i>0) {
+                        c.beginPath(); let pct=i/50; c.arc(0,0,40,-Math.PI/2, -Math.PI/2+(PI2*pct));
+                        c.lineWidth=4; c.strokeStyle='#fff'; c.stroke();
                     }
                 });
+                bx += 92;
+                if (bx > 900) { bx = 0; by += 92; }
             }
+
+            atlasCanvas.refresh();
+        },
+
+        createSeparate: function(textures, key, w, h, fn) {
+            if (textures.exists(key)) return;
+            const c = textures.createCanvas(key, w, h);
+            fn(c.context, w, h);
+            c.refresh();
         }
     };
 
@@ -293,25 +249,18 @@
         constructor() { super('MainScene'); }
 
         refreshGrid() {
-            for (let i = 0; i < this.gridMax; i++) {
-                this.spatialGrid[i].length = 0;
-            }
-
-            const size = this.gridSize;
+            for (let i = 0; i < this.gridMax; i++) this.spatialGrid[i].length = 0;
+            const size = GRID_SIZE;
             const cols = this.gridCols;
             const offset = 50;
-
             let enemies = this.entities.enemies;
-            for (let i = 0; i < enemies.length; i++) {
+            for (let i = 0, len = enemies.length; i < len; i++) {
                 let e = enemies[i];
                 if (!e.active) continue;
-
-                let gx = Math.floor((e.x + offset) / size);
-                let gy = Math.floor((e.y + offset) / size);
-
+                let gx = ((e.x + offset) / size) | 0;
+                let gy = ((e.y + offset) / size) | 0;
                 if (gx >= 0 && gx < cols && gy >= 0 && gy < this.gridRows) {
-                    let idx = gx + (gy * cols);
-                    this.spatialGrid[idx].push(e);
+                    this.spatialGrid[gx + (gy * cols)].push(e);
                 }
             }
         }
@@ -326,158 +275,196 @@
         }
 
         create() {
-            this.center = { x: CONFIG.WIDTH / 2, y: CONFIG.HEIGHT / 2 };
+            this.w = W;
+            this.h = H;
+            this.center = { x: W / 2, y: H / 2 };
+            
+            this.entities = { enemies: [], bullets: [], missiles: [], drones: [], lightnings: [], shockwaves: [], muzzles: [], crits: [] };
+            this.pools = { enemies: [], bullets: [], missiles: [], lightnings: [], shockwaves: [], muzzles: [], crits: [] };
+            
+            this.audioTimers = {};
+            this.barTextures = [];
+            for(let i=0; i<=50; i++) this.barTextures.push('bar_ring_' + i);
 
-            this.add.image(0, 0, 'background').setOrigin(0).setDepth(-10);
+            this.lay = {
+                bg: this.add.layer(),
+                base: this.add.layer(),
+                main: this.add.layer(),
+                turret: this.add.layer(),
+                air: this.add.layer(),
+                sniper: this.add.layer(),
+                ground: this.add.layer(),
+                fx: this.add.layer(),
+                ui: this.add.layer()
+            };
+
+            let bg = this.add.image(0, 0, 'background').setOrigin(0);
+            this.lay.bg.add(bg);
 
             this.vis = {
                 enemies: this.add.group(),
                 bullets: this.add.group(),
                 missiles: this.add.group(),
-                parts: this.add.group(),
                 drones: this.add.group(),
                 muzzles: this.add.group(),
-                crits: this.add.group()
+                crits: this.add.group(),
+                beams: this.add.group({ defaultKey: 'atlas', defaultFrame: 'particle' }),
+                shockwaves: this.add.group({ classType: Phaser.GameObjects.Sprite }) 
             };
+            
+            this.explosionEmitter = this.add.particles(0, 0, 'atlas', {
+                frame: 'particle',
+                speed: { min: 50, max: 150 },
+                scale: { start: 1, end: 0 },
+                lifespan: 500,
+                quantity: 1,
+                emitting: false
+            });
+            this.lay.fx.add(this.explosionEmitter);
 
-            this.entities = {
-                enemies: [],
-                bullets: [],
-                missiles: [],
-                drones: [],
-                lightnings: [],
-                shockwaves: [],
-                particles: [],
-                muzzles: [],
-                crits: []
-            };
+            this.missileTrail = this.add.particles(0, 0, 'atlas', {
+                frame: 'particle',
+                scale: { start: 0.8, end: 0 },
+                alpha: { start: 0.5, end: 0 },
+                lifespan: 300,
+                blendMode: 'ADD',
+                frequency: -1, 
+                tint: 0xcccccc
+            });
+            this.lay.fx.add(this.missileTrail);
 
-            this.pools = {
-                enemies: [],
-                bullets: [],
-                missiles: [],
-                lightnings: [],
-                shockwaves: [],
-                particles: [],
-                muzzles: [],
-                crits: []
-            };
+            this.visBarrels = this.add.sprite(this.center.x, this.center.y, 'atlas', 'barrel_1').setOrigin(0, 0.5);
+            this.lay.turret.add(this.visBarrels);
 
-            this.gRadar = this.add.graphics().setDepth(1);
-            this.gLaser = this.add.graphics().setDepth(4);
-
-            this.visBarrels = this.add.sprite(this.center.x, this.center.y, 'barrel_1').setDepth(6);
-            this.visBarrels.setOrigin(0, 0.5);
-
-            this.gLightning = this.add.graphics().setDepth(20);
-            this.gShockwave = this.add.graphics().setDepth(2);
-
-            this.visSniperGun = this.add.sprite(this.center.x, this.center.y, 'sniper_weapon').setDepth(8).setVisible(false).setOrigin(0.15, 0.5);
+            this.visReticle = this.add.sprite(0, 0, 'atlas', 'reticle').setVisible(false).setAlpha(0.8);
+            this.lay.ui.add(this.visReticle);
 
             this.state = {
-                run: false,
-                frame: 0,
-                elapsed: 0,
-                radarAngle: 0,
-                phaseIndex: 0,
-                phaseName: "READY",
-                timeStr: "00:00",
-                isOverdrive: false,
-                overdriveEnd: 0,
-                screenShake: 0,
-                kills: 0
+                run: false, elapsed: 0, spawnTimer: 0, missileTimer: 0, radarAngle: 0, phaseIndex: 0, 
+                phaseName: "READY", timeStr: "00:00", isOverdrive: false, overdriveEnd: 0, 
+                screenShake: 0, kills: 0, 
+                sniperFireTimer: 0, lastExplosionTime: 0
             };
 
             this.turret = {
-                angle: -1.57,
-                sniperAngle: -1.57,
-                cd: 0,
-                muzzleFlash: 0,
-                multi: 1,
-                frost: false,
-                sniperCd: 0,
-                sniperTarget: null,
-                sniperUnlocked: false,
-                crit: false,
-                lightning: false,
-                recoil: 0,
-                sniperRecoil: 0,
-                visBase: this.add.image(this.center.x, this.center.y, 'turretBase').setDepth(5),
-                visHead: this.add.image(this.center.x, this.center.y, 'turretHead').setDepth(7)
+                angle: -1.57, sniperAngle: -1.57, cd: 0, multi: 1, frost: false,
+                sniperCd: 0, sniperTarget: null, sniperUnlocked: false, crit: false, lightning: false,
+                recoil: 0, sniperRecoil: 0,
+                scanTimer: 0,
+                visBase: this.add.image(this.center.x, this.center.y, 'atlas', 'turretBase'),
+                visHead: this.add.image(this.center.x, this.center.y, 'atlas', 'turretHead')
             };
+
+            this.lay.base.add(this.turret.visBase);
+            this.lay.turret.add(this.turret.visHead);
+
+            this.visSniperGun = this.add.sprite(this.center.x, this.center.y, 'atlas', 'sniper_weapon').setVisible(false).setOrigin(0.15, 0.5);
+            this.lay.sniper.add(this.visSniperGun);
+
             this.lockedTarget = null;
             this.timeScale = 1.0;
 
             this.createUI();
 
-            this.gridSize = CONFIG.GRID_SIZE;
-            this.gridCols = Math.ceil(CONFIG.WIDTH / this.gridSize) + 2;
-            this.gridRows = Math.ceil(CONFIG.HEIGHT / this.gridSize) + 2;
+            this.gridSize = GRID_SIZE;
+            this.gridCols = (W / this.gridSize + 2) | 0;
+            this.gridRows = (H / this.gridSize + 2) | 0;
             this.gridMax = this.gridCols * this.gridRows;
-
             this.spatialGrid = new Array(this.gridMax).fill(null).map(() => []);
-
             this.cameras.main.setZoom(1);
+        }
+
+        playSound(key) {
+            const now = this.time.now;
+            let threshold = 30; 
+            if (key === 'turret' && this.state.isOverdrive) threshold = 40; 
+            if (!this.audioTimers[key] || now - this.audioTimers[key] > threshold) {
+                this.sound.play(key);
+                this.audioTimers[key] = now;
+            }
         }
 
         spawnEnemy(x, y, type, hp, speed, r) {
             let e;
             if (this.pools.enemies.length > 0) {
                 e = this.pools.enemies.pop();
-                e.active = true;
+                e.active = true; 
                 e.x = x; e.y = y; e.hp = hp; e.maxHp = hp;
-                e.spd = speed; e.baseSpd = speed; e.r = r; e.rSq = r * r;
-                e.type = type; e.angle = 0; e.dashed = false; e.frozen = 0;
+                e.spd = speed; e.baseSpd = speed; e.r = r;
+                e.type = type; e.angle = 0; e.startTime = this.state.elapsed; 
+                e.dashed = false; e.frozen = 0;
+                e.sprite = e.sprite; 
                 e.hitTimer = 0; e.scatterTimer = 0;
+                e.barSprite = e.barSprite; 
+                e.isTinted = false;
+                e.hitSq = (r + 10) * (r + 10);
 
-                e.sprite.setVisible(true);
-                e.sprite.setTexture(type);
-                e.sprite.clearTint();
-                e.sprite.setAlpha(1);
-                if (type === 'mini') e.sprite.setTint(0xffaaaa);
+                e.sprite.setVisible(true).setTexture('atlas', type).clearTint().setAlpha(1);
+                e.sprite.setActive(false);
+                e.sprite.setDepth(1);
 
-                if (e.barSprite) e.barSprite.setVisible(false);
-
-                if (type === 'boss') {
-                    if (!e.barSprite) {
-                        e.barSprite = this.add.sprite(0, 0, 'bar_ring_50');
+                if (type === 'mini') { e.sprite.setTint(0xffaaaa); e.isTinted = true; }
+                if (e.barSprite) {
+                    e.barSprite.setVisible(false);
+                    if (e.barSprite.parentContainer !== this.lay.main) {
+                        this.lay.ui.remove(e.barSprite);
+                        this.lay.main.add(e.barSprite);
                     }
+                    e.barSprite.setDepth(0);
+                }
+                if (type === 'boss' && !e.barSprite) {
+                    e.barSprite = this.add.sprite(0, 0, 'atlas', 'bar_ring_50');
+                    this.lay.main.add(e.barSprite); 
+                    e.barSprite.setDepth(0);
+                    e.barSprite.setActive(false);
                 }
             } else {
+                let sprite = this.vis.enemies.create(x, y, 'atlas', type);
+                this.lay.main.add(sprite);
+                sprite.setDepth(1);
+                sprite.setActive(false);
+                
+                let barSprite = null;
+                if (type === 'boss') {
+                    barSprite = this.add.sprite(0, 0, 'atlas', 'bar_ring_50');
+                    this.lay.main.add(barSprite); 
+                    barSprite.setDepth(0);
+                    barSprite.setActive(false);
+                }
+
                 e = {
-                    active: true,
-                    x: x, y: y,
-                    hp: hp, maxHp: hp,
-                    spd: speed, baseSpd: speed,
-                    r: r, rSq: r * r,
-                    type: type, angle: 0,
-                    startFrame: this.state.frame,
+                    active: true, x: x, y: y, hp: hp, maxHp: hp,
+                    spd: speed, baseSpd: speed, r: r, 
+                    type: type, angle: 0, startTime: this.state.elapsed, 
                     dashed: false, frozen: 0,
-                    sprite: this.vis.enemies.create(x, y, type),
-                    hitTimer: 0, scatterTimer: 0,
-                    barSprite: (type === 'boss') ? this.add.sprite(0, 0, 'bar_ring_50') : null
+                    sprite: sprite, hitTimer: 0, scatterTimer: 0,
+                    barSprite: barSprite, isTinted: false,
+                    hitSq: (r + 10) * (r + 10)
                 };
-                if (type === 'mini') e.sprite.setTint(0xffaaaa);
+                if (type === 'mini') { e.sprite.setTint(0xffaaaa); e.isTinted = true; }
             }
             this.entities.enemies.push(e);
             return e;
         }
 
-        spawnBullet(x, y, vx, vy, life, dmg, isDrone) {
+        spawnBullet(x, y, vx, vy, life, dmg, type) {
             let b;
+            let tex = type === 1 ? 'bullet_drone' : (type === 2 ? 'sniper_projectile' : 'bullet');
+            let angle = atan2(vy, vx); 
+
             if (this.pools.bullets.length > 0) {
                 b = this.pools.bullets.pop();
-                b.active = true;
-                b.x = x; b.y = y; b.vx = vx; b.vy = vy; b.life = life; b.dmg = dmg; b.isDrone = isDrone;
-                b.sprite.setVisible(true);
-                b.sprite.setTexture(isDrone ? 'bullet_drone' : 'bullet');
-                b.sprite.setOrigin(1, 0.5);
+                b.active = true; b.x = x; b.y = y; b.vx = vx; b.vy = vy; b.life = life; b.dmg = dmg; b.type = type;
+                b.sprite = b.sprite; b.angle = angle;
+                b.sprite.setVisible(true).setTexture('atlas', tex).setOrigin(1, 0.5).clearTint();
+                b.sprite.setActive(false);
             } else {
-                let key = isDrone ? 'bullet_drone' : 'bullet';
-                b = { active: true, x: x, y: y, vx: vx, vy: vy, life: life, dmg: dmg, isDrone: isDrone, sprite: this.vis.bullets.create(x, y, key) };
-                b.sprite.setOrigin(1, 0.5);
+                let sprite = this.vis.bullets.create(x, y, 'atlas', tex);
+                this.lay.air.add(sprite); 
+                sprite.setOrigin(1, 0.5);
+                sprite.setActive(false); 
+                b = { active: true, x: x, y: y, vx: vx, vy: vy, life: life, dmg: dmg, type: type, sprite: sprite, angle: angle };
             }
-            b.sprite.setDepth(5);
             this.entities.bullets.push(b);
         }
 
@@ -485,32 +472,18 @@
             let m;
             if (this.pools.missiles.length > 0) {
                 m = this.pools.missiles.pop();
-                m.active = true;
-                m.x = x; m.y = y; m.angle = angle; m.speed = 1; m.maxSpeed = 15;
+                m.active = true; m.x = x; m.y = y; m.angle = angle; m.speed = 1; m.maxSpeed = 15;
                 m.vx = 0; m.vy = 0; m.life = 400; m.dmg = dmg; m.target = null;
-                m.sprite.setVisible(true);
-                m.sprite.setAlpha(1);
+                m.smokeCd = 0; 
+                m.sprite.setVisible(true).setAlpha(1).clearTint();
+                m.sprite.setActive(false);
             } else {
-                m = { active: true, x: x, y: y, angle: angle, speed: 1, maxSpeed: 15, vx: 0, vy: 0, life: 400, dmg: dmg, target: null, sprite: this.vis.missiles.create(x, y, 'missile') };
+                let sprite = this.vis.missiles.create(x, y, 'atlas', 'missile');
+                this.lay.air.add(sprite);
+                sprite.setActive(false);
+                m = { active: true, x: x, y: y, angle: angle, speed: 1, maxSpeed: 15, vx: 0, vy: 0, life: 400, dmg: dmg, target: null, sprite: sprite, smokeCd: 0 };
             }
             this.entities.missiles.push(m);
-        }
-
-        spawnParticle(x, y, color) {
-            let p;
-            if (this.pools.particles.length > 0) {
-                p = this.pools.particles.pop();
-                p.active = true;
-                p.x = x; p.y = y; p.life = 1.0; p.vx = (Math.random() - 0.5) * 2; p.vy = (Math.random() - 0.5) * 2;
-                p.sprite.setVisible(true);
-                p.sprite.setPosition(x, y);
-                p.sprite.setTint(color);
-                p.sprite.setAlpha(1);
-            } else {
-                p = { active: true, x: x, y: y, life: 1.0, vx: (Math.random() - 0.5) * 2, vy: (Math.random() - 0.5) * 2, sprite: this.vis.parts.create(x, y, 'particle') };
-                p.sprite.setTint(color);
-            }
-            this.entities.particles.push(p);
         }
 
         spawnMuzzle(x, y) {
@@ -518,9 +491,13 @@
             if (this.pools.muzzles.length > 0) {
                 m = this.pools.muzzles.pop();
                 m.active = true; m.x = x; m.y = y; m.life = 4;
-                m.sprite.setVisible(true); m.sprite.setPosition(x, y); m.sprite.setAlpha(1);
+                m.sprite.setVisible(true).setPosition(x, y).setAlpha(1);
+                m.sprite.setActive(false);
             } else {
-                m = { active: true, x: x, y: y, life: 4, sprite: this.vis.muzzles.create(x, y, 'muzzle').setDepth(6.1) };
+                let sprite = this.vis.muzzles.create(x, y, 'atlas', 'muzzle');
+                this.lay.fx.add(sprite);
+                sprite.setActive(false);
+                m = { active: true, x: x, y: y, life: 4, sprite: sprite };
             }
             this.entities.muzzles.push(m);
         }
@@ -530,9 +507,13 @@
             if (this.pools.crits.length > 0) {
                 c = this.pools.crits.pop();
                 c.active = true; c.x = x; c.y = y; c.life = 30;
-                c.sprite.setVisible(true); c.sprite.setPosition(x, y); c.sprite.setAlpha(1); c.sprite.setScale(1);
+                c.sprite.setVisible(true).setPosition(x, y).setAlpha(1).setScale(1);
+                c.sprite.setActive(false);
             } else {
-                c = { active: true, x: x, y: y, life: 30, sprite: this.vis.crits.create(x, y, 'crit').setDepth(20) };
+                let sprite = this.vis.crits.create(x, y, 'atlas', 'crit');
+                this.lay.fx.add(sprite);
+                sprite.setActive(false);
+                c = { active: true, x: x, y: y, life: 30, sprite: sprite };
             }
             this.entities.crits.push(c);
         }
@@ -542,9 +523,9 @@
             if (this.pools.lightnings.length > 0) {
                 l = this.pools.lightnings.pop();
                 l.active = true; l.x1 = x1; l.y1 = y1; l.x2 = x2; l.y2 = y2; l.life = 10;
-                for (let i = 0; i < 10; i++) l.offsets[i] = (Math.random() - 0.5) * 12;
+                for (let i = 0; i < 10; i++) l.offsets[i] = (random() - 0.5) * 12;
             } else {
-                l = { active: true, x1: x1, y1: y1, x2: x2, y2: y2, life: 10, offsets: Array.from({ length: 10 }, () => (Math.random() - 0.5) * 12) };
+                l = { active: true, x1: x1, y1: y1, x2: x2, y2: y2, life: 10, offsets: Array.from({ length: 10 }, () => (random() - 0.5) * 12) };
             }
             this.entities.lightnings.push(l);
         }
@@ -554,10 +535,21 @@
             let s;
             if (this.pools.shockwaves.length > 0) {
                 s = this.pools.shockwaves.pop();
-                s.active = true; s.x = x; s.y = y; s.r = rStart; s.maxR = rEnd; s.color = color; s.alpha = 1.0;
+                s.active = true;
+                s.x = x; s.y = y; s.r = rStart; s.maxR = rEnd; 
+                if (s.sprite) {
+                    s.sprite.setVisible(true).setActive(true).setTint(color).setAlpha(1).setPosition(x, y);
+                    s.sprite.setActive(false);
+                    this.lay.ground.add(s.sprite); 
+                }
             } else {
-                s = { active: true, x: x, y: y, r: rStart, maxR: rEnd, color: color, alpha: 1.0 };
+                let sprite = this.vis.shockwaves.get(x, y, 'shockwave_tex');
+                this.lay.ground.add(sprite);
+                sprite.setActive(false);
+                s = { active: true, x: x, y: y, r: rStart, maxR: rEnd, sprite: sprite };
+                if (s.sprite) s.sprite.setTint(color).setAlpha(1);
             }
+            if (s.sprite) s.sprite.setScale(rStart / 60);
             this.entities.shockwaves.push(s);
         }
 
@@ -576,38 +568,44 @@
             const style = { fontFamily: 'Courier New', fontSize: '32px', color: '#00ffaa', fontStyle: 'bold' };
 
             this.startCont = this.add.container(0, 0).setDepth(100);
+            this.lay.ui.add(this.startCont);
             this.startCont.setScrollFactor(0);
 
-            let bg = this.add.rectangle(CONFIG.WIDTH / 2, CONFIG.HEIGHT / 2, CONFIG.WIDTH, CONFIG.HEIGHT, 0x000a00, 0.9);
-            let title = this.add.text(CONFIG.WIDTH / 2, CONFIG.HEIGHT / 2 - 50, "TURRET V73.1", style).setOrigin(0.5);
-            let sub = this.add.text(CONFIG.WIDTH / 2, CONFIG.HEIGHT / 2, "OPTIMIZED BUILD", { fontSize: '14px', color: '#686' }).setOrigin(0.5);
-            let btn = this.add.text(CONFIG.WIDTH / 2, CONFIG.HEIGHT / 2 + 100, "[ INITIATE ]", { fontSize: '24px', backgroundColor: '#111', color: '#4f4', padding: { x: 20, y: 10 } }).setOrigin(0.5).setInteractive();
+            let bg = this.add.rectangle(W / 2, H / 2, W, H, 0x000a00, 0.9);
+            let title = this.add.text(W / 2, H / 2 - 50, "TURRET V73.9", style).setOrigin(0.5);
+            let sub = this.add.text(W / 2, H / 2, "FINAL CLEAN BUILD", { fontSize: '14px', color: '#686' }).setOrigin(0.5);
+            let btn = this.add.text(W / 2, H / 2 + 100, "[ INITIATE ]", { fontSize: '24px', backgroundColor: '#111', color: '#4f4', padding: { x: 20, y: 10 } }).setOrigin(0.5).setInteractive();
 
             btn.on('pointerdown', () => { if (this.sound.context.state === 'suspended') this.sound.context.resume(); this.startGame(); });
             this.startCont.add([bg, title, sub, btn]);
 
-            this.hudTime = this.add.text(CONFIG.WIDTH / 2, 40, "00:00", { fontSize: '40px', color: '#ccc' }).setOrigin(0.5).setVisible(false).setDepth(90).setScrollFactor(0);
-            this.hudPhase = this.add.text(CONFIG.WIDTH / 2, 80, "DEPLOYMENT", { fontSize: '14px', color: '#aa5' }).setOrigin(0.5).setVisible(false).setDepth(90).setScrollFactor(0);
-            this.hudFPS = this.add.text(CONFIG.WIDTH - 20, 40, "FPS: 60", { fontSize: '20px', color: '#00ff00', fontStyle: 'bold' }).setOrigin(1, 0.5).setDepth(90).setVisible(false).setScrollFactor(0);
+            this.hudTime = this.add.text(W / 2, 40, "00:00", { fontSize: '40px', color: '#ccc' }).setOrigin(0.5).setVisible(false).setScrollFactor(0);
+            this.lay.ui.add(this.hudTime);
 
-            this.spdBtn = this.add.text(CONFIG.WIDTH / 2, CONFIG.HEIGHT - 50, "SPEED 1X", { fontSize: '16px', backgroundColor: '#222', padding: 8 }).setOrigin(0.5).setInteractive().setVisible(false).setDepth(90).setScrollFactor(0);
+            this.hudPhase = this.add.text(W / 2, 80, "DEPLOYMENT", { fontSize: '14px', color: '#aa5' }).setOrigin(0.5).setVisible(false).setScrollFactor(0);
+            this.lay.ui.add(this.hudPhase);
+
+            this.spdBtn = this.add.text(W / 2, H - 50, "SPEED 1X", { fontSize: '16px', backgroundColor: '#222', padding: 8 }).setOrigin(0.5).setInteractive().setVisible(false).setScrollFactor(0);
+            this.lay.ui.add(this.spdBtn);
+            
             this.spdBtn.on('pointerdown', () => {
                 this.timeScale = this.timeScale === 1.0 ? 2.0 : 1.0;
                 this.spdBtn.setText(`SPEED ${this.timeScale}X`);
                 this.spdBtn.setStyle({ color: this.timeScale > 1 ? '#ff0' : '#fff' });
             });
 
-            this.goCont = this.add.container(0, 0).setVisible(false).setDepth(100);
+            this.goCont = this.add.container(0, 0).setVisible(false);
+            this.lay.ui.add(this.goCont);
             this.goCont.setScrollFactor(0);
 
-            let goBg = this.add.rectangle(CONFIG.WIDTH / 2, CONFIG.HEIGHT / 2, CONFIG.WIDTH, CONFIG.HEIGHT, 0x000000, 0.9);
-            let goTitle = this.add.text(CONFIG.WIDTH / 2, CONFIG.HEIGHT / 2 - 80, "M.I.A.", { fontSize: '60px', color: '#f33' }).setOrigin(0.5);
+            let goBg = this.add.rectangle(W / 2, H / 2, W, H, 0x000000, 0.9);
+            let goTitle = this.add.text(W / 2, H / 2 - 80, "M.I.A.", { fontSize: '60px', color: '#f33' }).setOrigin(0.5);
 
-            this.goStats = this.add.text(CONFIG.WIDTH / 2, CONFIG.HEIGHT / 2 + 20, "", {
+            this.goStats = this.add.text(W / 2, H / 2 + 20, "", {
                 fontFamily: 'Courier New', fontSize: '24px', color: '#fff', align: 'center', lineHeight: 32
             }).setOrigin(0.5);
 
-            let retry = this.add.text(CONFIG.WIDTH / 2, CONFIG.HEIGHT / 2 + 120, "RETRY", style).setOrigin(0.5).setInteractive();
+            let retry = this.add.text(W / 2, H / 2 + 120, "RETRY", style).setOrigin(0.5).setInteractive();
             retry.on('pointerdown', () => this.scene.restart());
             this.goCont.add([goBg, goTitle, this.goStats, retry]);
         }
@@ -617,27 +615,28 @@
             this.hudTime.setVisible(true);
             this.hudPhase.setVisible(true);
             this.spdBtn.setVisible(true);
-            this.hudFPS.setVisible(true);
             this.state.run = true;
         }
 
         update(time, delta) {
             if (!this.state.run) return;
-            const steps = Math.ceil(this.timeScale);
-            for (let s = 0; s < steps; s++) this.logicUpdate();
-            this.visualUpdate();
+
+            const dt = min(delta / 1000, 0.1);
+            const df = (dt * 60) * this.timeScale;
+
+            this.logicUpdate(df, dt);
+            this.visualUpdate(df);
         }
 
-        logicUpdate() {
+        logicUpdate(df, dt) {
             this.refreshGrid();
-            this.state.frame++;
-            this.state.elapsed = this.state.frame / 60;
+            
+            this.state.elapsed += dt * this.timeScale;
+            this.state.radarAngle += 0.01 * df;
+            if (this.state.screenShake > 0) this.state.screenShake -= 0.5 * df;
 
-            this.state.radarAngle += 0.01;
-            if (this.state.screenShake > 0) this.state.screenShake -= 0.5;
-
-            let cycle = CONFIG.PHASE_DURATION;
-            let newIndex = Math.floor(this.state.elapsed / cycle);
+            let cycle = PHASE_DURATION;
+            let newIndex = (this.state.elapsed / cycle) | 0;
             if (newIndex > 5) newIndex = 5;
 
             if (newIndex !== this.state.phaseIndex) {
@@ -650,18 +649,22 @@
                 this.hudPhase.setText(this.state.phaseName);
 
                 let dCount = this.entities.drones.length;
-                if (newIndex >= 3 && dCount < 1) this.spawnDrone(0);
-                if (newIndex >= 4 && dCount < 2) this.spawnDrone(1);
-                if (newIndex >= 5 && dCount < 4) { this.spawnDrone(2); this.spawnDrone(3); }
+                if (newIndex >= 3 && dCount < 1) this.spawnDrone(0); 
+                if (newIndex >= 4 && dCount < 2) this.spawnDrone(1); 
+                if (newIndex >= 5 && dCount < 4) { this.spawnDrone(2); this.spawnDrone(3); } 
             }
 
-            let m = Math.floor(this.state.elapsed / 60);
-            let s = Math.floor(this.state.elapsed % 60);
-            this.state.timeStr = `${m}:${s < 10 ? '0' + s : s}`;
-            this.hudTime.setText(this.state.timeStr);
+            let m = (this.state.elapsed / 60) | 0;
+            let s = (this.state.elapsed % 60) | 0;
+            let newTimeStr = `${m}:${s < 10 ? '0' + s : s}`;
+
+            if (newTimeStr !== this.state.timeStr) {
+                this.state.timeStr = newTimeStr;
+                this.hudTime.setText(newTimeStr);
+            }
 
             if (this.state.elapsed >= 360) {
-                let pt = this.state.elapsed % CONFIG.PHASE_DURATION;
+                let pt = this.state.elapsed % PHASE_DURATION;
                 if (pt >= 118 && pt < 118.2 && !this.state.isOverdrive) {
                     this.state.isOverdrive = true;
                     this.state.overdriveEnd = this.state.elapsed + 7.0;
@@ -669,153 +672,153 @@
             }
             if (this.state.isOverdrive && this.state.elapsed > this.state.overdriveEnd) this.state.isOverdrive = false;
 
-            this.spawnEnemyLogic();
-            this.spawnMissileLogic();
-            this.updateEnemies();
-            this.updateTurret();
-            this.updateSniper();
-            this.updateBullets();
-            this.updateMissiles();
-            this.updateDrones();
-            this.updateParticles();
-            this.updateShockwaves();
-            this.updateMuzzles();
-            this.updateCrits();
+            this.spawnEnemyLogic(df);
+            this.spawnMissileLogic(df);
+            this.updateEnemies(df);
+            this.updateTurret(df);
+            this.updateSniper(df);
+            this.updateBullets(df);
+            this.updateMissiles(df);
+            this.updateDrones(df);
+            this.updateShockwaves(df);
+            this.updateMuzzles(df);
+            this.updateCrits(df);
         }
 
-        spawnEnemyLogic() {
+        spawnEnemyLogic(df) {
             let delay = DATA.SPAWN_DELAYS[this.state.phaseIndex];
-            if (this.state.frame % delay !== 0) return;
+            this.state.spawnTimer += df;
 
-            let count = 1;
-            if (this.state.phaseIndex >= 3 && Math.random() < 0.3) count = 2;
-            if (this.state.phaseIndex >= 5 && Math.random() < 0.4) count = 3;
-            const pad = -50;
+            if (this.state.spawnTimer >= delay) {
+                this.state.spawnTimer -= delay;
 
-            let currentRates = DATA.SPAWN_RATES[Math.min(this.state.phaseIndex, 5)];
+                let count = 1;
+                if (this.state.phaseIndex >= 3 && random() < 0.3) count = 2;
+                if (this.state.phaseIndex >= 5 && random() < 0.4) count = 3;
+                const pad = -50;
 
-            let tSplitter = currentRates[0];
-            let tBoss = tSplitter + currentRates[1];
-            let tDasher = tBoss + currentRates[2];
-            let tOrbital = tDasher + currentRates[3];
+                let currentRates = DATA.SPAWN_RATES[min(this.state.phaseIndex, 5)];
+                let tSplitter = currentRates[0];
+                let tBoss = tSplitter + currentRates[1];
+                let tDasher = tBoss + currentRates[2];
+                let tOrbital = tDasher + currentRates[3];
 
-            for (let k = 0; k < count; k++) {
-                let rnd = Math.random() * 100;
-                let type = 'normal';
-                if (rnd < tSplitter) type = 'splitter';
-                else if (rnd < tBoss) type = 'boss';
-                else if (rnd < tDasher) type = 'dasher';
-                else if (rnd < tOrbital) type = 'orbital';
+                for (let k = 0; k < count; k++) {
+                    let rnd = random() * 100;
+                    let type = 'normal';
+                    if (rnd < tSplitter) type = 'splitter';
+                    else if (rnd < tBoss) type = 'boss';
+                    else if (rnd < tDasher) type = 'dasher';
+                    else if (rnd < tOrbital) type = 'orbital';
 
-                let side = Phaser.Math.Between(0, 3);
-                let x, y, ox = (Math.random() - 0.5) * 75, oy = (Math.random() - 0.5) * 75;
-                if (side === 0) { x = Math.random() * CONFIG.WIDTH + ox; y = pad + oy; }
-                else if (side === 1) { x = CONFIG.WIDTH - pad + ox; y = Math.random() * CONFIG.HEIGHT + oy; }
-                else if (side === 2) { x = Math.random() * CONFIG.WIDTH + ox; y = CONFIG.HEIGHT - pad + oy; }
-                else { x = pad + ox; y = Math.random() * CONFIG.HEIGHT + oy; }
+                    let side = Phaser.Math.Between(0, 3);
+                    let x, y, ox = (random() - 0.5) * 75, oy = (random() - 0.5) * 75;
+                    if (side === 0) { x = random() * W + ox; y = pad + oy; }
+                    else if (side === 1) { x = W - pad + ox; y = random() * H + oy; }
+                    else if (side === 2) { x = random() * W + ox; y = H - pad + oy; }
+                    else { x = pad + ox; y = random() * H + oy; }
 
-                let hpMult = DATA.HP_MULTS[this.state.phaseIndex];
-                if (this.state.elapsed > 600) {
-                    let intervals = Math.floor((this.state.elapsed - 600) / CONFIG.SCALING_INTERVAL);
-                    hpMult *= Math.pow(CONFIG.SCALING_FACTOR, intervals);
+                    let hpMult = DATA.HP_MULTS[this.state.phaseIndex];
+                    if (this.state.elapsed > 600) {
+                        let intervals = ((this.state.elapsed - 600) / SCALING_INTERVAL) | 0;
+                        hpMult *= Math.pow(SCALING_FACTOR, intervals);
+                    }
+
+                    let hp = 100 * hpMult;
+                    let speed = (1.0 + random() * 0.75) + (this.state.phaseIndex * 0.25);
+                    let r = 12;
+                    if (type === 'boss') { hp *= 10; speed *= 0.5; r = 30; }
+                    else if (type === 'dasher') { speed *= 1.2; }
+                    else if (type === 'splitter') { hp *= 1.5; speed *= 0.8; r = 14; }
+
+                    this.spawnEnemy(x, y, type, hp, speed, r);
                 }
-
-                let hp = 100 * hpMult;
-                let speed = (1.0 + Math.random() * 0.75) + (this.state.phaseIndex * 0.25);
-                let r = 12;
-                if (type === 'boss') { hp *= 10; speed *= 0.5; r = 30; }
-                else if (type === 'dasher') { speed *= 1.2; }
-                else if (type === 'splitter') { hp *= 1.5; speed *= 0.8; r = 14; }
-
-                this.spawnEnemy(x, y, type, hp, speed, r);
             }
         }
 
         spawnDrone(idx) {
-            let offsets = [0, -Math.PI / 2, Math.PI, Math.PI / 2];
+            let offsets = [0, -PI / 2, PI, PI / 2];
+            let sprite = this.vis.drones.create(0, 0, 'atlas', 'drone');
+            sprite.setActive(false);
             this.entities.drones.push({
                 active: true, baseOffset: offsets[idx], dist: 75, cd: 0,
-                sprite: this.vis.drones.create(0, 0, 'drone')
+                sprite: sprite
             });
+            this.lay.air.add(sprite);
         }
 
-        updateEnemies() {
-            for (let i = this.entities.enemies.length - 1; i >= 0; i--) {
-                let e = this.entities.enemies[i];
+        updateEnemies(df) {
+            let enemies = this.entities.enemies;
+            for (let i = enemies.length - 1; i >= 0; i--) {
+                let e = enemies[i];
                 let dSq = UTILS.distSq(this.center.x, this.center.y, e.x, e.y);
 
                 if (e.scatterTimer > 0) {
-                    e.x += Math.cos(e.angle) * (e.spd * 2.5);
-                    e.y += Math.sin(e.angle) * (e.spd * 2.5);
-                    e.scatterTimer--;
+                    e.x += cos(e.angle) * (e.spd * 2.5) * df;
+                    e.y += sin(e.angle) * (e.spd * 2.5) * df;
+                    e.scatterTimer -= df;
                 } else {
-                    let targetAngle = Math.atan2(this.center.y - e.y, this.center.x - e.x);
-                    if (e.type === 'orbital') targetAngle += Math.sin((this.state.frame - e.startFrame) * 0.1) * 0.5;
-                    if (e.type === 'dasher' && !e.dashed && dSq < CONFIG.DASHER_SENSE) { e.baseSpd *= 1.7; e.dashed = true; }
-
-                    e.angle = Phaser.Math.Angle.RotateTo(e.angle, targetAngle, 0.25);
+                    let targetAngle = atan2(this.center.y - e.y, this.center.x - e.x);
+                    if (e.type === 'orbital') { targetAngle += sin((this.state.elapsed - e.startTime) * 6.0) * 0.5; }
+                    if (e.type === 'dasher' && !e.dashed && dSq < DASHER_SENSE) { e.baseSpd *= 1.7; e.dashed = true; }
+                    e.angle = Phaser.Math.Angle.RotateTo(e.angle, targetAngle, 0.25 * df); 
                     let spd = e.baseSpd;
-                    if (e.frozen > 0) { e.frozen--; spd *= 0.5; }
-                    e.x += Math.cos(e.angle) * spd;
-                    e.y += Math.sin(e.angle) * spd;
+                    if (e.frozen > 0) { e.frozen -= df; spd *= 0.5; }
+                    e.x += cos(e.angle) * spd * df;
+                    e.y += sin(e.angle) * spd * df;
                 }
                 if (dSq < 400) this.gameOver();
             }
         }
 
-        updateTurret() {
-            let needScan = !this.lockedTarget || !this.lockedTarget.active || (this.state.frame % 15 === 0);
-
-            if (needScan) {
+        updateTurret(df) {
+            this.turret.scanTimer -= df;
+            let isTargetInvalid = !this.lockedTarget || !this.lockedTarget.active;
+            
+            if (isTargetInvalid || this.turret.scanTimer <= 0) {
+                this.turret.scanTimer = 15;
                 let closest = null, minDSq = Infinity;
-
-                for (let i = 0; i < this.entities.enemies.length; i++) {
-                    let e = this.entities.enemies[i];
+                let enemies = this.entities.enemies;
+                for (let i = 0, len = enemies.length; i < len; i++) {
+                    let e = enemies[i];
                     if (!e.active) continue;
-
                     let d = UTILS.distSq(this.center.x, this.center.y, e.x, e.y);
-                    if (d < minDSq) {
-                        minDSq = d;
-                        closest = e;
-                    }
+                    if (d < minDSq) { minDSq = d; closest = e; }
                 }
 
-                if (!this.lockedTarget || !this.lockedTarget.active) {
+                if (isTargetInvalid) {
                     this.lockedTarget = closest;
                 } else if (closest) {
                     let currentDist = UTILS.distSq(this.center.x, this.center.y, this.lockedTarget.x, this.lockedTarget.y);
-                    if (minDSq < currentDist - 5000) {
-                        this.lockedTarget = closest;
-                    }
+                    if (minDSq < currentDist - 5000) this.lockedTarget = closest;
                 }
             }
 
             if (this.lockedTarget && this.lockedTarget.active) {
                 let t = this.lockedTarget;
-                let dist = Math.sqrt(UTILS.distSq(t.x, t.y, this.center.x, this.center.y));
-
+                let dist = sqrt(UTILS.distSq(t.x, t.y, this.center.x, this.center.y));
                 let bSpd = this.state.elapsed >= 600 ? 20 : (12 + (this.state.elapsed / 600) * 8);
                 let timeToHit = dist / bSpd;
-                let px = t.x + Math.cos(t.angle) * t.spd * timeToHit;
-                let py = t.y + Math.sin(t.angle) * t.spd * timeToHit;
-                let targetAng = Math.atan2(py - this.center.y, px - this.center.x);
+                let px = t.x + cos(t.angle) * t.spd * timeToHit;
+                let py = t.y + sin(t.angle) * t.spd * timeToHit;
+                let targetAng = atan2(py - this.center.y, px - this.center.x);
 
                 let diff = targetAng - this.turret.angle;
-                while (diff < -Math.PI) diff += UTILS.PI2;
-                while (diff > Math.PI) diff -= UTILS.PI2;
-                this.turret.angle += diff * 0.25;
+                while (diff < -PI) diff += PI2;
+                while (diff > PI) diff -= PI2;
+                this.turret.angle += diff * 0.25 * df; 
 
                 if (this.turret.cd <= 0) {
-                    let rate = Math.max(5, 40 - ((this.state.elapsed / 600) * 35));
-                    if (this.state.isOverdrive) rate = Math.max(2, 10 - this.state.phaseIndex);
+                    let rate = max(5, 40 - ((this.state.elapsed / 600) * 35));
+                    if (this.state.isOverdrive) rate = max(2, 10 - this.state.phaseIndex);
                     this.turret.cd = rate;
                     this.turret.recoil = 6;
-                    this.sound.play('turret');
-                    let dmg = CONFIG.BASE_DMG * DATA.DMG_MULTS[this.state.phaseIndex];
+                    this.playSound('turret');
+                    let dmg = BASE_DMG * DATA.DMG_MULTS[this.state.phaseIndex];
 
-                    if (this.turret.crit && Math.random() < 0.15) {
+                    if (this.turret.crit && random() < 0.15) {
                         dmg *= 2;
-                        this.spawnCrit(this.center.x + Math.cos(this.turret.angle) * 40, this.center.y + Math.sin(this.turret.angle) * 40);
+                        this.spawnCrit(this.center.x + cos(this.turret.angle) * 40, this.center.y + sin(this.turret.angle) * 40);
                     }
 
                     let spread = this.state.isOverdrive ? 0.1 : 0.05;
@@ -825,71 +828,68 @@
                         let ang = startAng + spread * k;
                         let pat = DATA.BARRELS[this.turret.multi] || DATA.BARRELS[1];
                         let p = pat[k] || { x: 0, y: 0 };
-                        let ca = Math.cos(this.turret.angle), sa = Math.sin(this.turret.angle);
-
+                        let ca = cos(this.turret.angle), sa = sin(this.turret.angle);
                         let bx = this.center.x + ca * 60 - sa * (p.y || 0) + ca * (p.x || 0);
                         let by = this.center.y + sa * 60 + ca * (p.y || 0) + sa * (p.x || 0);
-                        this.spawnBullet(bx, by, Math.cos(ang) * bSpd, Math.sin(ang) * bSpd, 60, dmg, false);
-
+                        this.spawnBullet(bx, by, cos(ang) * bSpd, sin(ang) * bSpd, 60, dmg, 0);
                         let mx = this.center.x + ca * 65 - sa * (p.y || 0) + ca * (p.x || 0);
                         let my = this.center.y + sa * 65 + ca * (p.y || 0) + sa * (p.x || 0);
                         this.spawnMuzzle(mx, my);
                     }
                 }
             } else {
-                this.turret.angle += 0.02;
+                this.turret.angle += 0.02 * df;
             }
 
-            if (this.turret.cd > 0) this.turret.cd--;
-            if (this.turret.recoil > 0) this.turret.recoil *= 0.8;
+            if (this.turret.cd > 0) this.turret.cd -= df;
+            if (this.turret.recoil > 0) this.turret.recoil *= Math.pow(0.8, df);
         }
 
-        updateBullets() {
-            const size = this.gridSize;
+        updateBullets(df) {
+            const size = GRID_SIZE;
             const cols = this.gridCols;
-            const rows = this.gridRows;
             const offset = 50;
+            let bullets = this.entities.bullets;
+            let boundsW = W + 50; 
+            let boundsH = H + 50;
 
-            for (let i = this.entities.bullets.length - 1; i >= 0; i--) {
-                let b = this.entities.bullets[i];
-
-                b.x += b.vx;
-                b.y += b.vy;
-                b.life--;
-
-                if (b.x < -50 || b.x > CONFIG.WIDTH + 50 || b.y < -50 || b.y > CONFIG.HEIGHT + 50) {
-                    b.life = 0;
-                }
-
+            for (let i = bullets.length - 1; i >= 0; i--) {
+                let b = bullets[i];
+                b.x += b.vx * df; b.y += b.vy * df; b.life -= df;
+                
+                if (b.x < -50 || b.x > boundsW || b.y < -50 || b.y > boundsH) { b.life = 0; }
+                
                 let hit = false;
-
-                let bgx = Math.floor((b.x + offset) / size);
-                let bgy = Math.floor((b.y + offset) / size);
+                let bgx = ((b.x + offset) / size) | 0;
+                let bgy = ((b.y + offset) / size) | 0;
 
                 for (let ox = -1; ox <= 1; ox++) {
                     for (let oy = -1; oy <= 1; oy++) {
                         let checkX = bgx + ox;
                         let checkY = bgy + oy;
-
-                        if (checkX >= 0 && checkX < cols && checkY >= 0 && checkY < rows) {
+                        if (checkX >= 0 && checkX < cols && checkY >= 0 && checkY < this.gridRows) {
                             let idx = checkX + (checkY * cols);
                             let enemiesInCell = this.spatialGrid[idx];
-
-                            for (let k = 0; k < enemiesInCell.length; k++) {
+                            
+                            for (let k = 0, eLen = enemiesInCell.length; k < eLen; k++) {
                                 let e = enemiesInCell[k];
-                                if (Math.abs(b.x - e.x) > 45 || Math.abs(b.y - e.y) > 45) continue;
-
-                                if (UTILS.distSq(b.x, b.y, e.x, e.y) < (e.r + 10) ** 2) {
+                                
+                                if (abs(b.x - e.x) > 45 || abs(b.y - e.y) > 45) continue;
+                                
+                                let dx = b.x - e.x;
+                                let dy = b.y - e.y;
+                                if ((dx * dx + dy * dy) < e.hitSq) {
                                     this.hitEnemy(e, b.dmg, b.vx, b.vy);
                                     hit = true;
-
                                     let allowLightning = true;
-                                    if (b.isDrone && this.state.elapsed >= 360) allowLightning = false;
-                                    if (!b.isDrone && this.state.elapsed >= 480) allowLightning = true;
-
-                                    if (allowLightning && this.turret.lightning && Math.random() < 0.5) {
-                                        this.triggerLightning(e);
+                                    if (b.type === 1 && this.state.elapsed >= 360) allowLightning = false; 
+                                    if (b.type !== 1 && this.state.elapsed >= 480) allowLightning = true; 
+                                    
+                                    if (b.type === 2) {
+                                        this.addShockwave(e.x, e.y, 5, 40, '#ffcc00');
                                     }
+
+                                    if (allowLightning && this.turret.lightning && random() < 0.5) { this.triggerLightning(e); }
                                     break;
                                 }
                             }
@@ -898,107 +898,125 @@
                     }
                     if (hit) break;
                 }
+                if (hit || b.life <= 0) { this.killEntity(this.entities.bullets, i, this.pools.bullets); }
+            }
+        }
 
-                if (hit || b.life <= 0) {
-                    this.killEntity(this.entities.bullets, i, this.pools.bullets);
+        updateSniper(df) {
+            if (!this.turret.sniperUnlocked) return;
+
+            if (this.turret.sniperTarget && !this.turret.sniperTarget.active) { this.turret.sniperTarget = null; }
+
+            if (!this.turret.sniperTarget) {
+                let enemies = this.entities.enemies;
+                for (let i = 0, len = enemies.length; i < len; i++) {
+                    let e = enemies[i];
+                    if (e.active && e.type === 'boss') { this.turret.sniperTarget = e; break; }
                 }
             }
-        }
 
-        updateSniper() {
-    if (!this.turret.sniperUnlocked) return;
-
-    // 1. VALIDASI TARGET (Cukup cek apakah masih aktif)
-    // Kita tidak perlu cek UID lagi.
-    if (this.turret.sniperTarget && !this.turret.sniperTarget.active) {
-        this.turret.sniperTarget = null;
-    }
-
-    // 2. CARI TARGET BARU (Jika kosong)
-    if (!this.turret.sniperTarget) {
-        for (let i = 0; i < this.entities.enemies.length; i++) {
-            let e = this.entities.enemies[i];
-            // Cukup cari BOSS yang AKTIF
-            if (e.active && e.type === 'boss') {
-                this.turret.sniperTarget = e;
-                // this.turret.sniperTargetUid = e.uid; <-- HAPUS
-                break;
-            }
-        }
-    }
-
-    // 3. LOGIKA NEMBAK (Sama seperti sebelumnya, cuma hapus referensi UID jika ada)
-    if (this.turret.sniperTarget) {
-        let t = this.turret.sniperTarget;
-                let ang = Math.atan2(t.y - this.center.y, t.x - this.center.x);
+            if (this.turret.sniperTarget) {
+                let t = this.turret.sniperTarget;
+                let ang = atan2(t.y - this.center.y, t.x - this.center.x);
                 let diff = ang - this.turret.sniperAngle;
+                while (diff < -PI) diff += PI2; while (diff > PI) diff -= PI2;
+                
+                this.turret.sniperAngle += diff * 0.05 * df;
 
-                while (diff < -Math.PI) diff += UTILS.PI2;
-                while (diff > Math.PI) diff -= UTILS.PI2;
-
-                this.turret.sniperAngle += diff * 0.075;
-
-                if (this.turret.sniperCd <= 0 && Math.abs(diff) < 0.01) {
+                if (this.turret.sniperCd <= 0 && abs(diff) < 0.02) { 
                     this.turret.sniperCd = 90;
-                    this.turret.sniperRecoil = 20;
-                    this.sound.play('sniper');
-
-                    t.hp -= (CONFIG.BASE_DMG * DATA.DMG_MULTS[this.state.phaseIndex]) * 20;
-                    this.addShockwave(t.x, t.y, 5, 40, '#00ffff');
-                    if (t.hp <= 0) this.killEnemy(t);
+                    this.state.sniperFireTimer = 20; 
+                    this.turret.sniperRecoil = 25; 
+                    this.playSound('sniper');
+                    
+                    let dmg = (BASE_DMG * DATA.DMG_MULTS[this.state.phaseIndex]) * 20;
+                    
+                    let muzzleX = this.center.x + cos(this.turret.sniperAngle) * 90;
+                    let muzzleY = this.center.y + sin(this.turret.sniperAngle) * 90;
+                    this.spawnBullet(
+                        muzzleX, muzzleY, 
+                        cos(this.turret.sniperAngle) * 50, 
+                        sin(this.turret.sniperAngle) * 50, 
+                        60, dmg, 2
+                    );
+                    
+                    this.spawnMuzzle(muzzleX, muzzleY);
                 }
             }
-
-            if (this.turret.sniperCd > 0) this.turret.sniperCd--;
-            if (this.turret.sniperRecoil > 0) this.turret.sniperRecoil *= 0.8;
+            if (this.turret.sniperCd > 0) this.turret.sniperCd -= df;
+            if (this.state.sniperFireTimer > 0) this.state.sniperFireTimer -= df; 
+            if (this.turret.sniperRecoil > 0) this.turret.sniperRecoil *= Math.pow(0.85, df);
         }
 
-        spawnMissileLogic() {
-            if (this.state.elapsed < 360) return;
-            let progress = Math.min(1.0, Math.max(0, (this.state.elapsed - 360) / 240));
+        spawnMissileLogic(df) {
+            if (this.state.phaseIndex < 2) return; 
+            
+            let progress = min(1.0, max(0, (this.state.elapsed - 240) / 360));
             let rate = Math.floor(120 - (progress * 60));
-            if (this.state.frame % rate === 0 && this.entities.enemies.length > 0) {
-                let count = this.state.elapsed >= 480 ? 2 : 1;
-                for (let i = 0; i < count; i++) {
-                    let a = this.turret.angle + (i === 0 ? -1.57 : 1.57);
-                    let mx = this.center.x + Math.cos(a) * 25;
-                    let my = this.center.y + Math.sin(a) * 25;
-                    this.spawnMissile(mx, my, this.turret.angle, CONFIG.BASE_DMG * DATA.DMG_MULTS[this.state.phaseIndex] * 2);
-                    if (i === 0) this.sound.play('missile');
+            this.state.missileTimer += df;
+            
+            if (this.state.missileTimer >= rate) {
+                this.state.missileTimer -= rate;
+                if (this.entities.enemies.length > 0) {
+                    let count = this.state.phaseIndex >= 4 ? 2 : 1;
+                    
+                    for (let i = 0; i < count; i++) {
+                        let a = this.turret.angle + (i === 0 ? -1.57 : 1.57);
+                        let mx = this.center.x + cos(a) * 25;
+                        let my = this.center.y + sin(a) * 25;
+                        this.spawnMissile(mx, my, this.turret.angle, BASE_DMG * DATA.DMG_MULTS[this.state.phaseIndex] * 2);
+                        if (i === 0) this.playSound('missile');
+                    }
                 }
             }
         }
 
-        updateMissiles() {
+        updateMissiles(df) {
             for (let i = this.entities.missiles.length - 1; i >= 0; i--) {
                 let m = this.entities.missiles[i];
-                if (m.speed < m.maxSpeed) m.speed += 0.3;
+                if (m.speed < m.maxSpeed) m.speed += 0.3 * df;
                 if (!m.target || !m.target.active) {
                     let minD = Infinity;
-                    for (let e of this.entities.enemies) {
+                    let enemies = this.entities.enemies;
+                    for (let j = 0, len = enemies.length; j < len; j++) {
+                        let e = enemies[j];
                         let d = UTILS.distSq(m.x, m.y, e.x, e.y);
                         if (d < minD) { minD = d; m.target = e; }
                     }
                 }
                 if (m.target) {
-                    let ang = Math.atan2(m.target.y - m.y, m.target.x - m.x);
+                    let ang = atan2(m.target.y - m.y, m.target.x - m.x);
                     let diff = ang - m.angle;
-                    while (diff < -Math.PI) diff += UTILS.PI2; while (diff > Math.PI) diff -= UTILS.PI2;
-                    m.angle += diff * 0.2;
+                    while (diff < -PI) diff += PI2; while (diff > PI) diff -= PI2;
+                    m.angle += diff * 0.2 * df;
                 }
-                let mc = Math.cos(m.angle), ms = Math.sin(m.angle);
-                m.x += mc * m.speed; m.y += ms * m.speed;
-                m.life--;
+                let mc = cos(m.angle), ms = sin(m.angle);
+                m.x += mc * m.speed * df; 
+                m.y += ms * m.speed * df;
+                m.life -= df;
 
-                if (this.state.frame % 3 === 0) this.spawnParticle(m.x, m.y, 0x555555);
+                if (m.smokeCd <= 0) {
+                    let rx = m.x - mc * 10;
+                    let ry = m.y - ms * 10;
+                    this.missileTrail.emitParticleAt(rx, ry);
+                    m.smokeCd = 3.0; 
+                } else {
+                    m.smokeCd -= df;
+                }
 
                 let hit = false;
-                for (let e of this.entities.enemies) {
+                let enemies = this.entities.enemies;
+                for (let j = 0, len = enemies.length; j < len; j++) {
+                    let e = enemies[j];
                     if (UTILS.distSq(m.x, m.y, e.x, e.y) < (e.r + 15) ** 2) {
                         e.hp -= m.dmg; hit = true;
                         this.addShockwave(m.x, m.y, 10, 80, '#ff5500');
                         this.state.screenShake = 5;
-                        this.sound.play('explode');
+                        let now = this.time.now;
+                        if (now - this.state.lastExplosionTime > 50) {
+                            this.playSound('explode');
+                            this.state.lastExplosionTime = now;
+                        }
                         if (e.hp <= 0) this.killEnemy(e);
                         break;
                     }
@@ -1009,77 +1027,84 @@
             }
         }
 
-        updateDrones() {
+        updateDrones(df) {
             let elapsed = this.state.elapsed;
-            let dist = 70 + (Math.min(elapsed, 600) / 600) * 10;
-            let rate = 10 - (Math.min(elapsed, 600) / 600) * 5;
-            for (let d of this.entities.drones) {
+            let dist = 70 + (min(elapsed, 600) / 600) * 10;
+            let rate = 10 - (min(elapsed, 600) / 600) * 5;
+            let drones = this.entities.drones;
+            let enemies = this.entities.enemies;
+
+            for (let i = 0; i < drones.length; i++) {
+                let d = drones[i];
                 let orbit = this.state.radarAngle + d.baseOffset;
-                let dx = this.center.x + Math.cos(orbit) * dist;
-                let dy = this.center.y + Math.sin(orbit) * dist;
+                let dx = this.center.x + cos(orbit) * dist;
+                let dy = this.center.y + sin(orbit) * dist;
                 if (d.sprite) { d.sprite.setPosition(dx, dy); d.sprite.setRotation(orbit); }
                 let target = null, minD = Infinity;
-                for (let e of this.entities.enemies) {
+                
+                for (let j = 0, len = enemies.length; j < len; j++) {
+                    let e = enemies[j];
                     let dst = UTILS.distSq(dx, dy, e.x, e.y);
                     if (dst < minD) { minD = dst; target = e; }
                 }
                 if (target && d.cd <= 0) {
                     d.cd = rate;
-                    let ang = Math.atan2(target.y - dy, target.x - dx);
-                    let dmg = (CONFIG.BASE_DMG * DATA.DMG_MULTS[this.state.phaseIndex]) * 0.5;
-                    this.spawnBullet(dx, dy, Math.cos(ang) * 20, Math.sin(ang) * 20, 40, dmg, true);
-                    this.sound.play('drone');
+                    let ang = atan2(target.y - dy, target.x - dx);
+                    let dmg = (BASE_DMG * DATA.DMG_MULTS[this.state.phaseIndex]) * 0.5;
+                    this.spawnBullet(dx, dy, cos(ang) * 20, sin(ang) * 20, 40, dmg, 1);
+                    this.playSound('drone');
                 }
-                if (d.cd > 0) d.cd--;
+                if (d.cd > 0) d.cd -= df;
             }
         }
 
-        updateParticles() {
-            for (let i = this.entities.particles.length - 1; i >= 0; i--) {
-                let p = this.entities.particles[i];
-                p.x += p.vx; p.y += p.vy; p.life -= 0.05;
-                if (p.life <= 0) this.killEntity(this.entities.particles, i, this.pools.particles);
-            }
-        }
-
-        updateMuzzles() {
+        updateMuzzles(df) {
             for (let i = this.entities.muzzles.length - 1; i >= 0; i--) {
                 let m = this.entities.muzzles[i];
-                m.life--;
+                m.life -= df;
                 if (m.life <= 0) this.killEntity(this.entities.muzzles, i, this.pools.muzzles);
             }
         }
 
-        updateCrits() {
+        updateCrits(df) {
             for (let i = this.entities.crits.length - 1; i >= 0; i--) {
                 let c = this.entities.crits[i];
-                c.y -= 1; c.life--;
+                c.y -= 1 * df; c.life -= df;
                 if (c.life <= 0) this.killEntity(this.entities.crits, i, this.pools.crits);
             }
         }
 
-        updateShockwaves() {
+        updateShockwaves(df) {
             for (let i = this.entities.shockwaves.length - 1; i >= 0; i--) {
                 let s = this.entities.shockwaves[i];
-                s.r += (s.maxR - s.r) * 0.1;
-                s.alpha -= 0.05;
-                if (s.alpha <= 0) this.killEntity(this.entities.shockwaves, i, this.pools.shockwaves);
+                s.r += (s.maxR - s.r) * 0.1 * df;
+                let scale = s.r / 60;
+                s.sprite.setScale(scale);
+                s.sprite.setAlpha(s.sprite.alpha - 0.05 * df);
+
+                if (s.sprite.alpha <= 0) {
+                     s.active = false;
+                     s.sprite.setVisible(false);
+                     this.pools.shockwaves.push(s);
+                     this.entities.shockwaves[i] = this.entities.shockwaves[this.entities.shockwaves.length - 1];
+                     this.entities.shockwaves.pop();
+                }
             }
         }
 
         triggerLightning(source) {
-            let max = this.state.phaseIndex >= 5 ? 6 : 2;
+            let maxCount = this.state.phaseIndex >= 5 ? 6 : 2;
             let rangeSq = this.state.phaseIndex >= 5 ? 200 * 200 : 120 * 120;
             let count = 0;
+            let enemies = this.entities.enemies;
 
-            for (let i = this.entities.enemies.length - 1; i >= 0; i--) {
-                let e = this.entities.enemies[i];
+            for (let i = enemies.length - 1; i >= 0; i--) {
+                let e = enemies[i];
                 if (e === source) continue;
-                if (count >= max) break;
-
+                if (count >= maxCount) break;
                 if (UTILS.distSq(source.x, source.y, e.x, e.y) < rangeSq) {
                     this.spawnLightning(source.x, source.y, e.x, e.y);
-                    e.hp -= CONFIG.BASE_DMG * DATA.DMG_MULTS[this.state.phaseIndex] * 0.6;
+                    e.hp -= BASE_DMG * DATA.DMG_MULTS[this.state.phaseIndex] * 0.6;
                     if (e.hp <= 0) this.killEnemy(e);
                     count++;
                 }
@@ -1087,15 +1112,19 @@
         }
 
         hitEnemy(e, dmg, kx, ky) {
-            let force = CONFIG.KNOCKBACK * DATA.KB_TURRET[this.state.phaseIndex];
-            let mag = Math.sqrt(kx * kx + ky * ky);
-            e.x += (kx / mag) * force; e.y += (ky / mag) * force;
+            e.x += kx * 0.1; 
+            e.y += ky * 0.1;
+            
             e.hp -= dmg;
-            if (this.turret.frost) {
-                e.frozen = 60;
+            if (this.turret.frost) { e.frozen = 60; }
+            if (!e.isTinted) {
+                e.sprite.setTint(0xff0000);
+                e.isTinted = true;
             }
-            if (e.sprite) e.sprite.setTint(0xff0000);
-            for (let k = 0; k < 5; k++) this.spawnParticle(e.x, e.y, 0xffffff);
+            e.hitTimer = 2;
+            
+            this.explosionEmitter.emitParticleAt(e.x, e.y, 3);
+            
             if (e.hp <= 0) this.killEnemy(e);
         }
 
@@ -1106,10 +1135,12 @@
 
             this.state.kills++;
             this.addShockwave(e.x, e.y, 10, e.r * 2, e.type === 'boss' ? '#ff0000' : '#ffffff');
+            
+            this.explosionEmitter.emitParticleAt(e.x, e.y, 10);
 
             if (e.type === 'splitter') {
                 for (let i = 0; i < 3; i++) {
-                    let ang = (i * UTILS.PI2 / 3) + (Math.random() - 0.5);
+                    let ang = (i * PI2 / 3) + (random() - 0.5);
                     this.spawnEnemy(e.x, e.y, 'mini', e.maxHp * 0.3, e.baseSpd * 1.5, 8);
                     let last = this.entities.enemies[this.entities.enemies.length - 1];
                     last.angle = ang; last.scatterTimer = 30;
@@ -1118,70 +1149,77 @@
             this.killEntity(this.entities.enemies, idx, this.pools.enemies);
         }
 
-        visualUpdate() {
+        visualUpdate(df) {
             let center = this.center;
 
             let sx = 0, sy = 0;
             if (this.state.screenShake > 0) {
-                sx = (Math.random() - 0.5) * this.state.screenShake;
-                sy = (Math.random() - 0.5) * this.state.screenShake;
+                sx = (random() - 0.5) * this.state.screenShake;
+                sy = (random() - 0.5) * this.state.screenShake;
             }
 
             this.cameras.main.setScroll(-sx, -sy);
-
-            if (this.hudFPS.visible) this.hudFPS.setText(`FPS: ${Math.round(this.game.loop.actualFps)} | Pools: ${this.pools.bullets.length}`);
-
-            this.gLaser.clear();
+            
             if (this.turret.sniperUnlocked && this.turret.sniperTarget && this.turret.sniperTarget.active) {
                 let t = this.turret.sniperTarget;
-                let dist = Phaser.Math.Distance.Between(center.x, center.y, t.x, t.y);
-                let lx = Math.cos(this.turret.sniperAngle);
-                let ly = Math.sin(this.turret.sniperAngle);
-                let isFiring = this.turret.sniperCd > 80;
-                this.gLaser.lineStyle(isFiring ? 4 : 1, isFiring ? 0xffffaa : 0xeebb00, isFiring ? 1.0 : 0.3);
-                this.gLaser.beginPath();
-                this.gLaser.moveTo(center.x, center.y);
-                this.gLaser.lineTo(center.x + lx * dist, center.y + ly * dist);
-                this.gLaser.strokePath();
+                
+                this.visReticle.setVisible(true);
+                this.visReticle.setPosition(t.x, t.y);
+                this.visReticle.setRotation(this.time.now * 0.005);
+                let scale = 1.5 - min(1.0, (90 - this.turret.sniperCd) / 90) * 0.5;
+                if (this.turret.sniperCd > 80) scale = 2.0;
+                this.visReticle.setScale(scale);
+            } else {
+                this.visReticle.setVisible(false);
             }
-
-            this.gRadar.clear();
-            this.gRadar.fillStyle(0x00ff00, 0.1);
-            this.gRadar.slice(center.x, center.y, 1000, this.state.radarAngle, this.state.radarAngle + 0.5, false);
-            this.gRadar.fillPath();
-            this.gRadar.setPosition(0, 0);
 
             if (this.turret.sniperUnlocked) {
                 this.visSniperGun.setVisible(true);
                 let sRecoil = this.turret.sniperRecoil;
-                let rx = Math.cos(this.turret.sniperAngle) * -sRecoil;
-                let ry = Math.sin(this.turret.sniperAngle) * -sRecoil;
+                let rx = cos(this.turret.sniperAngle) * -sRecoil;
+                let ry = sin(this.turret.sniperAngle) * -sRecoil;
                 this.visSniperGun.setPosition(center.x + rx, center.y + ry);
                 this.visSniperGun.setRotation(this.turret.sniperAngle);
             }
 
-            for (let e of this.entities.enemies) {
+            let enemies = this.entities.enemies;
+            let boundsX = -50, boundsY = -50, boundsW = W + 50, boundsH = H + 50;
+
+            for (let i = 0, len = enemies.length; i < len; i++) {
+                let e = enemies[i];
+
+                if (e.x < boundsX || e.x > boundsW || e.y < boundsY || e.y > boundsH) {
+                    e.sprite.setVisible(false);
+                    if (e.barSprite) e.barSprite.setVisible(false);
+                    continue; 
+                }
+                
+                e.sprite.setVisible(true);
                 e.sprite.setPosition(e.x, e.y);
                 e.sprite.setRotation(e.angle);
 
                 if (e.hitTimer > 0) {
-                    e.sprite.setTint(0xff0000);
-                    e.hitTimer--;
+                    e.hitTimer -= df; 
                 } else if (e.frozen > 0) {
                     e.sprite.setTint(0x00ffff);
+                    e.isTinted = true;
                 } else {
-                    if (e.type === 'mini') e.sprite.setTint(0xffaaaa);
-                    else e.sprite.clearTint();
+                    if (e.isTinted) {
+                        if (e.type === 'mini') {
+                            e.sprite.setTint(0xffaaaa); 
+                        } else {
+                            e.sprite.clearTint();
+                            e.isTinted = false;
+                        }
+                    }
                 }
 
                 if (e.type === 'boss' && e.barSprite) {
                     e.barSprite.setVisible(true);
                     e.barSprite.setPosition(e.x, e.y);
-                    e.barSprite.setDepth(100);
-
-                    let hpPct = Math.max(0, e.hp / e.maxHp);
-                    let frameIndex = Math.floor(hpPct * 50);
-                    e.barSprite.setTexture('bar_ring_' + frameIndex);
+                    let hpPct = max(0, e.hp / e.maxHp);
+                    let frameIndex = (hpPct * 50) | 0;
+                    e.barSprite.setTexture('atlas', this.barTextures[frameIndex] || 'bar_ring_50');
 
                     if (hpPct < 0.25) e.barSprite.setTint(0xff0000);
                     else if (hpPct < 0.5) e.barSprite.setTint(0xffff00);
@@ -1189,36 +1227,39 @@
                 }
             }
 
-            for (let b of this.entities.bullets) {
+            let bullets = this.entities.bullets;
+            for (let i = 0, len = bullets.length; i < len; i++) {
+                let b = bullets[i];
                 b.sprite.setPosition(b.x, b.y);
-                b.sprite.setRotation(Math.atan2(b.vy, b.vx));
-                if (!b.isDrone) b.sprite.setTint(DATA.PHASE_COLORS[this.state.phaseIndex]);
+                b.sprite.setRotation(b.angle);
+                if (b.type === 0) b.sprite.setTint(DATA.PHASE_COLORS[this.state.phaseIndex]);
+                else b.sprite.clearTint();
             }
 
-            for (let m of this.entities.missiles) {
+            let missiles = this.entities.missiles;
+            for (let i = 0; i < missiles.length; i++) {
+                let m = missiles[i];
                 m.sprite.setPosition(m.x, m.y);
                 m.sprite.setRotation(m.angle);
             }
 
-            for (let p of this.entities.particles) {
-                p.sprite.setPosition(p.x, p.y);
-                p.sprite.setAlpha(p.life);
-            }
-
-            for (let m of this.entities.muzzles) {
+            let muzzles = this.entities.muzzles;
+            for (let i = 0; i < muzzles.length; i++) {
+                let m = muzzles[i];
                 m.sprite.setPosition(m.x, m.y);
                 m.sprite.setAlpha(m.life / 4);
             }
 
-            for (let c of this.entities.crits) {
+            let crits = this.entities.crits;
+            for (let i = 0; i < crits.length; i++) {
+                let c = crits[i];
                 c.sprite.setPosition(c.x, c.y);
                 c.sprite.setAlpha(c.life / 30);
-                c.sprite.setDepth(2000);
             }
 
             let desiredTex = 'barrel_' + this.turret.multi;
-            if (this.visBarrels.texture.key !== desiredTex) {
-                this.visBarrels.setTexture(desiredTex);
+            if (this.visBarrels.frame.name !== desiredTex) {
+                this.visBarrels.setFrame(desiredTex);
             }
 
             let kickback = 0;
@@ -1226,51 +1267,63 @@
                 kickback = this.turret.recoil * 1.5;
             }
 
-            let bx = center.x - (Math.cos(this.turret.angle) * kickback);
-            let by = center.y - (Math.sin(this.turret.angle) * kickback);
+            let bx = center.x - (cos(this.turret.angle) * kickback);
+            let by = center.y - (sin(this.turret.angle) * kickback);
 
             this.visBarrels.setPosition(bx, by);
             this.visBarrels.setRotation(this.turret.angle);
 
-            let recoilX = Math.cos(this.turret.angle) * -this.turret.recoil;
-            let recoilY = Math.sin(this.turret.angle) * -this.turret.recoil;
+            let recoilX = cos(this.turret.angle) * -this.turret.recoil;
+            let recoilY = sin(this.turret.angle) * -this.turret.recoil;
             this.turret.visHead.setPosition(center.x + recoilX, center.y + recoilY);
             this.turret.visHead.setRotation(this.turret.angle);
             this.turret.visBase.setPosition(center.x, center.y);
 
-            this.gLightning.clear();
-            this.gLightning.setDepth(20);
-            this.gLightning.lineStyle(2, 0x00aaff, 0.8);
-
-            for (let i = this.entities.lightnings.length - 1; i >= 0; i--) {
-                let l = this.entities.lightnings[i];
-
-                this.gLightning.beginPath();
-                this.gLightning.moveTo(l.x1, l.y1);
-
+            let beamSprites = this.vis.beams.getChildren();
+            for (let i = 0, len = beamSprites.length; i < len; i++) {
+                beamSprites[i].setVisible(false);
+            }
+            
+            let lightnings = this.entities.lightnings;
+            let beamIndex = 0;
+            
+            for (let i = lightnings.length - 1; i >= 0; i--) {
+                let l = lightnings[i];
+                
                 for (let j = 1; j <= 10; j++) {
-                    let t = j / 10;
-                    let tx = l.x1 + (l.x2 - l.x1) * t;
-                    let ty = l.y1 + (l.y2 - l.y1) * t;
-                    let off = l.offsets[j] || 0;
-                    this.gLightning.lineTo(tx + off, ty + off);
-                }
-                this.gLightning.strokePath();
+                    let t1 = (j-1) / 10;
+                    let t2 = j / 10;
+                    
+                    let x1 = l.x1 + (l.x2 - l.x1) * t1 + (l.offsets[j-1] || 0);
+                    let y1 = l.y1 + (l.y2 - l.y1) * t1 + (l.offsets[j-1] || 0);
+                    let x2 = l.x1 + (l.x2 - l.x1) * t2 + (l.offsets[j] || 0);
+                    let y2 = l.y1 + (l.y2 - l.y1) * t2 + (l.offsets[j] || 0);
 
-                l.life--;
+                    let beam = beamSprites[beamIndex];
+                    if (!beam) {
+                        beam = this.vis.beams.create(0, 0, 'atlas', 'particle');
+                        beam.setOrigin(0, 0.5);
+                        beam.setActive(false);
+                        this.lay.air.add(beam);
+                        beamSprites = this.vis.beams.getChildren(); 
+                    }
+                    beamIndex++;
+
+                    let dist = sqrt((x2-x1)**2 + (y2-y1)**2);
+                    let angle = atan2(y2-y1, x2-x1);
+
+                    beam.setVisible(true);
+                    beam.setPosition(x1, y1);
+                    beam.setRotation(angle);
+                    beam.setScale(dist / 4, 0.5); 
+                    beam.setTint(0x00aaff);
+                    beam.setAlpha(0.8);
+                }
+
+                l.life -= df; 
                 if (l.life <= 0) {
                     this.killEntity(this.entities.lightnings, i, this.pools.lightnings);
                 }
-            }
-
-            this.gShockwave.clear();
-            this.gShockwave.setDepth(2);
-            this.gShockwave.setPosition(0, 0);
-            for (let s of this.entities.shockwaves) {
-                this.gShockwave.fillStyle(s.color, s.alpha * 0.2);
-                this.gShockwave.fillCircle(s.x, s.y, s.r);
-                this.gShockwave.lineStyle(2, 0xffffff, s.alpha * 0.4);
-                this.gShockwave.strokeCircle(s.x, s.y, s.r);
             }
         }
 
@@ -1279,25 +1332,24 @@
             this.goCont.setVisible(true);
             this.hudTime.setVisible(false);
             this.spdBtn.setVisible(false);
-            this.hudFPS.setVisible(false);
             this.goStats.setText(`SURVIVED: ${this.state.timeStr}\nKILLS: ${this.state.kills}`);
         }
     }
 
     const config = {
         type: Phaser.WEBGL,
-        width: CONFIG.WIDTH,
-        height: CONFIG.HEIGHT,
+        width: W,
+        height: H,
         backgroundColor: '#050a05',
         parent: 'game-container',
         scene: MainScene,
         render: {
             antialias: true,
             roundPixels: false,
-            powerPreference: 'high-performance'
+            powerPreference: 'high-performance',
+            batchSize: 4096 
         },
         scale: { mode: Phaser.Scale.FIT, autoCenter: Phaser.Scale.CENTER_BOTH },
-        physics: { default: 'arcade', arcade: { fps: 60 } }
     };
 
     const game = new Phaser.Game(config);
